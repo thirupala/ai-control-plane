@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: decisionmesh-postgres
+    environment:
+      POSTGRES_DB: decisionmesh
+      POSTGRES_USER: decisionmesh
+      POSTGRES_PASSWORD: decisionmesh
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: decisionmesh-redis
+    ports:
+      - "6379:6379"
+
+  kafka:
+    image: redpandadata/redpanda:latest
+    container_name: decisionmesh-kafka
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp 1
+      - --memory 512M
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+    ports:
+      - "9092:9092"
+
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    container_name: decisionmesh-keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8180:8080"
+    volumes:
+      - ./infra/keycloak/decisionmesh-realm.json:/opt/keycloak/data/import/decisionmesh-realm.json
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: decisionmesh-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
