@@ -1,6 +1,7 @@
 package com.decisionmesh.api;
 
 import com.decisionmesh.application.service.ControlPlaneOrchestrator;
+import com.decisionmesh.contracts.security.entity.AuthenticatedIdentity;
 import com.decisionmesh.domain.intent.Intent;
 import io.quarkus.security.Authenticated;
 import io.quarkus.security.identity.SecurityIdentity;
@@ -13,6 +14,10 @@ import org.eclipse.microprofile.jwt.JsonWebToken;
 import io.quarkus.logging.Log;
 
 import java.util.UUID;
+
+import static io.micrometer.core.instrument.config.NamingConvention.identity;
+
+
 
 @Path("api/intents")
 @Produces(MediaType.APPLICATION_JSON)
@@ -28,6 +33,14 @@ public class IntentResource {
 
     @Inject
     JsonWebToken jwt;
+
+    @GET
+    @Path("/auth/me")
+    @Authenticated
+    public AuthenticatedIdentity me() {
+        return securityIdentity.getCredential(AuthenticatedIdentity.class);
+    }
+
 
     @POST
     @RolesAllowed({"sys_admin","tenant_admin", "tenant_user"})

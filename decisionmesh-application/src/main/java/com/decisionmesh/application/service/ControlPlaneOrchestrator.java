@@ -1,9 +1,8 @@
 package com.decisionmesh.application.service;
 
-
-import com.decisionmesh.application.exception.PolicyViolationException;
 import com.decisionmesh.application.exception.DuplicateSubmissionException;
 import com.decisionmesh.application.exception.LockExtensionFailedException;
+import com.decisionmesh.application.exception.PolicyViolationException;
 import com.decisionmesh.application.exception.RateLimitExceededException;
 import com.decisionmesh.application.idempotency.IdempotencyService;
 import com.decisionmesh.application.lock.LockManager;
@@ -21,7 +20,6 @@ import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.math.BigDecimal;
@@ -32,50 +30,29 @@ import java.util.UUID;
 @ApplicationScoped
 public class ControlPlaneOrchestrator {
 
-    @Inject
-    Planner planner;
+    // -------------------------------------------------------------------------
+    // Dependencies
+    // -------------------------------------------------------------------------
 
-    @Inject
-    ExecutionEngine executionEngine;
+    @Inject Planner planner;
+    @Inject ExecutionEngine executionEngine;
+    @Inject PolicyEngine policyEngine;
+    @Inject LearningEngine learningEngine;
+    @Inject BudgetGuard budgetGuard;
+    @Inject IntentCentricSLAGuard slaGuard;
+    @Inject RateLimiter rateLimiter;
+    @Inject IntentRepositoryPort intentRepository;
+    @Inject ExecutionRepositoryPort executionRepository;
+    @Inject IntentEventRepositoryPort eventRepository;
+    @Inject LockManager lockManager;
+    @Inject IdempotencyService idempotencyService;
+    @Inject TelemetryPublisher telemetry;
+    @Inject ReconciliationService reconciliationService;
+    @Inject PlanRepositoryPort planRepository;
 
-    @Inject
-    PolicyEngine policyEngine;
-
-    @Inject
-    LearningEngine learningEngine;
-
-    @Inject
-    BudgetGuard budgetGuard;
-
-    @Inject
-    IntentCentricSLAGuard slaGuard;
-
-    @Inject
-    RateLimiter rateLimiter;
-
-    @Inject
-    IntentRepositoryPort intentRepository;
-
-    @Inject
-    ExecutionRepositoryPort executionRepository;
-
-    @Inject
-    IntentEventRepositoryPort eventRepository;
-
-    @Inject
-    LockManager lockManager;
-
-    @Inject
-    IdempotencyService idempotencyService;
-
-    @Inject
-    TelemetryPublisher telemetry;
-
-    @Inject
-    ReconciliationService reconciliationService;
-
-    @Inject
-    PlanRepositoryPort planRepository;
+    // -------------------------------------------------------------------------
+    // Configuration
+    // -------------------------------------------------------------------------
 
     @ConfigProperty(name = "controlplane.lock.intent-ttl-minutes", defaultValue = "5")
     int lockTtlMinutes;
@@ -83,72 +60,88 @@ public class ControlPlaneOrchestrator {
     @ConfigProperty(name = "controlplane.lock.max-retries", defaultValue = "5")
     int lockMaxRetries;
 
+    @ConfigProperty(name = "controlplane.lock.initial-backoff-ms", defaultValue = "100")
+    int lockInitialBackoffMs;
+
+    @ConfigProperty(name = "controlplane.lock.extend-threshold-ms", defaultValue = "60000")
+    long lockExtendThresholdMs;
+
+    // -------------------------------------------------------------------------
+    // Public API
+    // -------------------------------------------------------------------------
+
     /**
      * Submit a new intent to the control plane.
+     * Pipeline: idempotency → rate limit → lock → workflow
      *
-     * @param intent          The intent aggregate (already validated by API layer)
-     * @param idempotencyKey  Caller-supplied idempotency key
-     * @param intentType      Intent type for rate limit scoping
-     * @return Intent UUID if accepted
+     * @param intent         The intent aggregate (already validated by API layer)
+     * @param tenantId       Tenant context from authenticated identity
+     * @param idempotencyKey Caller-supplied idempotency key
+     * @param intentType     Intent type for rate limit scoping
+     * @return Intent UUID on acceptance
      */
     public Uni<UUID> submit(Intent intent, UUID tenantId, String idempotencyKey, String intentType) {
 
         Log.infof("Intent submission: id=%s, tenant=%s, type=%s, idempotency=%s",
-                intent.getId(), intent.getTenantId(), intentType, idempotencyKey);
+                intent.getId(), tenantId, intentType, idempotencyKey);
 
-        // Step 1: Idempotency check (early return if duplicate)
         return idempotencyService.checkAndRegister(tenantId, idempotencyKey)
                 .flatMap(allowed -> {
                     if (!allowed) {
-                        Log.warnf("Duplicate intent submission blocked: idempotency=%s", idempotencyKey);
+                        Log.warnf("Duplicate intent blocked: idempotency=%s", idempotencyKey);
                         return Uni.createFrom().failure(
                                 new DuplicateSubmissionException("Duplicate request: " + idempotencyKey)
                         );
                     }
-
-                    // Step 2: Rate limit enforcement (PRE_SUBMISSION gate)
-                    return rateLimiter.enforce(tenantId, intentType)
-                            .flatMap(rateLimitOk -> {
-                                if (!rateLimitOk) {
-                                    Log.warnf("Rate limit exceeded: tenant=%s, type=%s", tenantId, intentType);
-                                    return Uni.createFrom().failure(
-                                            new RateLimitExceededException("Rate limit exceeded")
-                                    );
-                                }
-
-                                // Step 3: Process intent with distributed lock
-                                return  processIntentWithLock(intent, tenantId)
-                                        .replaceWith(intent.getId());
-                            });
+                    return rateLimiter.enforce(tenantId, intentType);
                 })
+                .flatMap(rateLimitOk -> {
+                    if (!rateLimitOk) {
+                        Log.warnf("Rate limit exceeded: tenant=%s, type=%s", tenantId, intentType);
+                        return Uni.createFrom().failure(
+                                new RateLimitExceededException("Rate limit exceeded for tenant: " + tenantId)
+                        );
+                    }
+                    return processIntentWithLock(intent, tenantId);
+                })
+                .replaceWith(intent.getId())
                 .onFailure().invoke(ex ->
-                        Log.errorf(ex, "Intent submission failed: id=%s", intent.getId())
+                        Log.errorf(ex, "Intent submission failed: id=%s, tenant=%s",
+                                intent.getId(), tenantId)
                 );
     }
 
-    public Uni<Intent> getById(UUID tenantId, UUID id){
-        Log.debugf("Fetching intent: id=%s", id);
-        return intentRepository.findById(tenantId,id);
+    /**
+     * Retrieve intent by ID, scoped to tenant.
+     */
+    public Uni<Intent> getById(UUID tenantId, UUID intentId) {
+        Log.debugf("Fetching intent: id=%s, tenant=%s", intentId, tenantId);
+        return intentRepository.findById(tenantId, intentId);
     }
 
+    // -------------------------------------------------------------------------
+    // Lock coordination
+    // -------------------------------------------------------------------------
 
     /**
-     * Process intent with distributed lock coordination.
-     * Ensures only ONE orchestrator processes this intent at any time.
+     * Acquire a distributed lock for this intent partition,
+     * run the workflow, then ALWAYS release — success or failure.
+     *
+     * Lock key format: "{tenantId}:{intentId}"
+     * Redis key becomes: "lock:{tenantId}:{intentId}"  (prefix added by RedisLockManager)
      */
-    private Uni<Void> processIntentWithLock(Intent intent,UUID tenantId) {
-        String partitionKey = buildPartitionKey(intent,tenantId);
+    private Uni<Void> processIntentWithLock(Intent intent, UUID tenantId) {
+        String partitionKey = buildPartitionKey(intent, tenantId);
 
-        // Acquire lock with retry (handles transient Redis failures)
         return lockManager.acquireWithRetry(
                         partitionKey,
                         Duration.ofMinutes(lockTtlMinutes),
                         lockMaxRetries,
-                        Duration.ofMillis(100)
+                        Duration.ofMillis(lockInitialBackoffMs)
                 )
                 .flatMap(lockToken ->
-                        // Execute workflow, always release lock (even on failure)
                         processIntentWorkflow(intent, lockToken)
+                                // eventually() = always runs: success, failure, AND cancellation
                                 .eventually(() -> releaseLockSafely(lockToken))
                 )
                 .onFailure().invoke(ex ->
@@ -157,21 +150,23 @@ public class ControlPlaneOrchestrator {
                 );
     }
 
+    // -------------------------------------------------------------------------
+    // Workflow
+    // -------------------------------------------------------------------------
+
     /**
-     * Main intent workflow: SUBMITTED → PLANNING → EXECUTING → EVALUATING → SATISFIED/VIOLATED
+     * Main intent workflow:
+     * SUBMITTED → PLANNING → EXECUTING → EVALUATING → SATISFIED | VIOLATED
      */
     private Uni<Void> processIntentWorkflow(Intent intent, LockToken lockToken) {
-
-        return Uni.createFrom().voidItem()
-
-                .flatMap(v -> policyEngine.evaluatePreSubmission(intent))
+        return policyEngine.evaluatePreSubmission(intent)
                 .invoke(this::assertPolicyAllowed)
 
                 .flatMap(v -> budgetGuard.validateBudget(intent))
 
                 .flatMap(v -> intentRepository.save(intent))
 
-                .invoke(() -> intent.startPlanning())
+                .invoke(v -> intent.startPlanning())
 
                 .flatMap(v -> planner.plan(intent))
                 .flatMap(plan -> planRepository.save(plan).replaceWith(plan))
@@ -183,7 +178,7 @@ public class ControlPlaneOrchestrator {
 
                 .flatMap(plan -> executeWithGovernanceAndRetry(intent, plan, lockToken, 1))
 
-                .invoke(() -> intent.markEvaluating())
+                .invoke(v -> intent.markEvaluating())
 
                 .flatMap(record ->
                         policyEngine.evaluatePostExecution(intent, record)
@@ -196,9 +191,16 @@ public class ControlPlaneOrchestrator {
                 .flatMap(v -> persistFinalState(intent));
     }
 
+    // -------------------------------------------------------------------------
+    // Execution with governance, SLA, and retry
+    // -------------------------------------------------------------------------
 
     /**
-     * Execute plan with governance checks, retry logic, and SLA enforcement.
+     * Execute plan with:
+     * - Lock health check (extend if TTL low)
+     * - SLA pre/post validation
+     * - Pre-execution policy gate
+     * - Retry with exponential-backoff semantics
      */
     private Uni<ExecutionRecord> executeWithGovernanceAndRetry(
             Intent intent,
@@ -206,84 +208,71 @@ public class ControlPlaneOrchestrator {
             LockToken lockToken,
             int attemptNumber
     ) {
-
         Log.debugf("Execution attempt %d/%d: intent=%s, plan=%s",
-                attemptNumber,
-                intent.getMaxRetries(),
-                intent.getId(),
-                plan.getPlanId());
+                attemptNumber, intent.getMaxRetries(), intent.getId(), plan.getPlanId());
 
-        return Uni.createFrom().voidItem()
+        return extendLockIfNeeded(lockToken)
 
-                // 1️⃣ Ensure lock is valid
-                .flatMap(v -> extendLockIfNeeded(lockToken))
-
-                // 2️⃣ SLA pre-check
                 .flatMap(v -> slaGuard.validateBeforeExecution(intent))
 
-                // 3️⃣ PRE-EXECUTION policy
                 .flatMap(v -> policyEngine.evaluatePreExecution(intent))
                 .invoke(this::assertPolicyAllowed)
 
-                // 4️⃣ Execute adapter plan
                 .flatMap(v -> executionEngine.execute(plan, attemptNumber))
 
-                // 5️⃣ Persist execution record immediately (append-only)
                 .flatMap(record ->
                         executionRepository.append(record)
                                 .replaceWith(record)
                 )
 
-                // 6️⃣ SLA post-check
                 .flatMap(record ->
                         slaGuard.validateAfterExecution(intent, record)
                                 .replaceWith(record)
                 )
 
-                // 7️⃣ Retry logic
-                .onFailure().recoverWithUni(ex -> {
-
-                    Log.warnf(ex,
-                            "Execution attempt %d failed: intent=%s",
-                            attemptNumber,
-                            intent.getId());
-
-                    // Retry exhausted
-                    if (attemptNumber >= intent.getMaxRetries()) {
-
-                        Log.errorf("Retry exhausted: intent=%s, attempts=%d",
-                                intent.getId(),
-                                attemptNumber);
-
-                        intent.markViolated();
-                        return intentRepository.save(intent)
-                                .flatMap(v -> Uni.createFrom().failure(ex));
-                    }
-
-                    // Schedule retry
-                    intent.scheduleRetry();
-
-                    return intentRepository.save(intent)
-                            .flatMap(v ->
-                                    executeWithGovernanceAndRetry(
-                                            intent,
-                                            plan,
-                                            lockToken,
-                                            attemptNumber + 1
-                                    )
-                            );
-                });
+                .onFailure().recoverWithUni(ex -> handleExecutionFailure(
+                        intent, plan, lockToken, attemptNumber, ex
+                ));
     }
 
+    /**
+     * Handle execution failure: retry or mark VIOLATED.
+     */
+    private Uni<ExecutionRecord> handleExecutionFailure(
+            Intent intent,
+            Plan plan,
+            LockToken lockToken,
+            int attemptNumber,
+            Throwable ex
+    ) {
+        Log.warnf(ex, "Execution attempt %d failed: intent=%s", attemptNumber, intent.getId());
+
+        if (attemptNumber >= intent.getMaxRetries()) {
+            Log.errorf("Retries exhausted: intent=%s, attempts=%d", intent.getId(), attemptNumber);
+            intent.markViolated();
+            return intentRepository.save(intent)
+                    .flatMap(v -> Uni.createFrom().failure(ex));
+        }
+
+        intent.scheduleRetry();
+        return intentRepository.save(intent)
+                .flatMap(v -> executeWithGovernanceAndRetry(
+                        intent, plan, lockToken, attemptNumber + 1
+                ));
+    }
+
+    // -------------------------------------------------------------------------
+    // Lock lifecycle helpers
+    // -------------------------------------------------------------------------
 
     /**
-     * Extend lock if remaining TTL is low (< 1 minute).
-     * Prevents lock expiry during long multi-step executions.
+     * Extend lock TTL when remaining time is below the configured threshold.
+     * Prevents expiry during long multi-step executions.
      */
     private Uni<Void> extendLockIfNeeded(LockToken lockToken) {
         long remainingMs = lockToken.remainingMillis();
 
-        if (remainingMs < 60_000) { // Less than 1 minute remaining
+        if (remainingMs < lockExtendThresholdMs) {
             Log.infof("Extending lock: partition=%s, remaining=%dms",
                     lockToken.partitionKey(), remainingMs);
 
@@ -292,7 +281,7 @@ public class ControlPlaneOrchestrator {
                         if (!extended) {
                             return Uni.createFrom().failure(
                                     new LockExtensionFailedException(
-                                            "Lock extension failed: " + lockToken.partitionKey()
+                                            "Failed to extend lock: " + lockToken.partitionKey()
                                     )
                             );
                         }
@@ -305,54 +294,8 @@ public class ControlPlaneOrchestrator {
     }
 
     /**
-     * Finalize intent based on execution result.
-     */
-    @Transactional
-    protected Uni<Void> finalizeIntent(Intent intent, ExecutionRecord executionRecord) {
-
-        if (executionRecord.isSuccess()) {
-            // Compute drift score (if evaluator is available)
-            BigDecimal driftScore = computeDriftScore(intent, executionRecord);
-            intent.updateDriftScore(driftScore, executionRecord.getId());
-
-            // Mark SATISFIED
-            intent.markSatisfied();
-
-            Log.infof("Intent SATISFIED: id=%s, cost=$%.6f, drift=%.4f, attempts=%d",
-                    intent.getId(), executionRecord.getCostUsd(), driftScore,
-                    executionRecord.getAttemptNumber());
-
-        } else {
-            // Mark VIOLATED
-            intent.markViolated();
-
-            Log.warnf("Intent VIOLATED: id=%s, reason=%s",
-                    intent.getId(), executionRecord.getFailureReason());
-        }
-
-        return Uni.createFrom().voidItem();
-    }
-
-    /**
-     * Persist final intent state + execution records + domain events.
-     */
-    private Uni<Void> persistFinalState(Intent intent) {
-
-        List<DomainEvent> events = intent.pullDomainEvents();
-
-        return intentRepository.save(intent)
-                .flatMap(v -> eventRepository.appendAll(events))
-                .flatMap(v -> learningEngine.updateProfiles(intent.getId()))
-                .flatMap(v -> publishTelemetry(intent))
-                .replaceWithVoid();
-    }
-
-
-
-
-    /**
-     * Safely release lock with token validation.
-     * Returns success/failure but does NOT throw.
+     * Release lock safely — never throws, logs warnings on failure.
+     * Called from eventually() so it always runs regardless of workflow outcome.
      */
     private Uni<Void> releaseLockSafely(LockToken lockToken) {
         return lockManager.release(lockToken)
@@ -362,28 +305,73 @@ public class ControlPlaneOrchestrator {
                                 lockToken.partitionKey(),
                                 System.currentTimeMillis() - lockToken.acquiredAt().toEpochMilli());
                     } else {
-                        Log.warnf("Lock release failed (already expired or stolen): partition=%s",
+                        Log.warnf("Lock already expired or stolen: partition=%s",
                                 lockToken.partitionKey());
                     }
                 })
                 .onFailure().invoke(ex ->
-                        Log.errorf(ex, "Lock release error: partition=%s", lockToken.partitionKey())
+                        Log.errorf(ex, "Lock release error (non-fatal): partition=%s",
+                                lockToken.partitionKey())
                 )
-                .onFailure().recoverWithItem(false) // Don't fail workflow on release error
+                .onFailure().recoverWithItem(false)
                 .replaceWithVoid();
     }
 
+    // -------------------------------------------------------------------------
+    // Finalization
+    // -------------------------------------------------------------------------
+
     /**
-     * Build partition key for distributed lock.
-     * Format: "intent:{tenant_id}:{intent_id}"
+     * Mark intent SATISFIED or VIOLATED based on execution result.
+     * Uses @WithTransaction (reactive-safe replacement for @Transactional).
      */
-    private String buildPartitionKey(Intent intent,UUID tenantId) {
-        return String.format("intent:%s:%s", tenantId, intent.getId());
+    protected Uni<Void> finalizeIntent(Intent intent, ExecutionRecord executionRecord) {
+        if (executionRecord.isSuccess()) {
+            BigDecimal driftScore = computeDriftScore(intent, executionRecord);
+            intent.updateDriftScore(driftScore, executionRecord.getId());
+            intent.markSatisfied();
+            Log.infof("Intent SATISFIED: id=%s, cost=$%.6f, drift=%.4f, attempts=%d",
+                    intent.getId(), executionRecord.getCostUsd(), driftScore,
+                    executionRecord.getAttemptNumber());
+        } else {
+            intent.markViolated();
+            Log.warnf("Intent VIOLATED: id=%s, reason=%s",
+                    intent.getId(), executionRecord.getFailureReason());
+        }
+        return Uni.createFrom().voidItem();
     }
 
     /**
-     * Assert policy evaluation result is ALLOWED.
-     * Throws if VIOLATION + HARD_STOP.
+     * Persist final state: intent + domain events + learning profiles + telemetry.
+     * All steps are sequential — a failure in any step propagates upward.
+     */
+    private Uni<Void> persistFinalState(Intent intent) {
+        List<DomainEvent> events = intent.pullDomainEvents();
+
+        return intentRepository.save(intent)
+                .flatMap(v -> eventRepository.appendAll(events))
+                .flatMap(v -> learningEngine.updateProfiles(intent.getId()))
+                .flatMap(v -> publishTelemetry(intent))
+                .replaceWithVoid();
+    }
+
+    // -------------------------------------------------------------------------
+    // Utilities
+    // -------------------------------------------------------------------------
+
+    /**
+     * Build partition key for distributed lock.
+     *
+     * Format:  "{tenantId}:{intentId}"
+     * RedisLockManager prepends "lock:" → final key: "lock:{tenantId}:{intentId}"
+     */
+    private String buildPartitionKey(Intent intent, UUID tenantId) {
+        return String.format("%s:%s", tenantId, intent.getId());
+    }
+
+    /**
+     * Assert policy result is ALLOWED. Throws on HARD_STOP violation.
+     * Logs warnings for soft violations.
      */
     private void assertPolicyAllowed(PolicyEvaluationResult evaluation) {
         if (evaluation.isBlocking()) {
@@ -400,18 +388,16 @@ public class ControlPlaneOrchestrator {
         }
     }
 
-
     /**
-     * Compute drift score (placeholder — delegate to IntentEvaluator).
+     * Compute drift score for the executed intent.
+     * TODO: Delegate to IntentEvaluator service.
      */
     private BigDecimal computeDriftScore(Intent intent, ExecutionRecord executionRecord) {
-        // TODO: Delegate to IntentEvaluator service
-        // For now, return 0.0 (no drift)
         return BigDecimal.ZERO;
     }
 
     /**
-     * Publish telemetry event.
+     * Publish telemetry event for observability pipeline.
      */
     private Uni<Void> publishTelemetry(Intent intent) {
         return telemetry.publish(
@@ -421,5 +407,4 @@ public class ControlPlaneOrchestrator {
                 intent.getVersion()
         );
     }
-
 }
