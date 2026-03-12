@@ -1,0 +1,25 @@
+package com.decisionmesh.advanced.validator;
+
+import com.decisionmesh.governance.ledger.LedgerEntry;
+import com.decisionmesh.governance.validator.LedgerValidator;
+import com.decisionmesh.domain.event.DomainEvent;
+import java.util.List;
+
+public class ReplayIntegrityValidator {
+
+    private final LedgerValidator ledgerValidator;
+
+    public ReplayIntegrityValidator(LedgerValidator ledgerValidator) {
+        this.ledgerValidator = ledgerValidator;
+    }
+
+    public void validate(List<LedgerEntry> ledgerEntries,
+                         List<DomainEvent> eventStream) {
+
+        ledgerValidator.validateChain(ledgerEntries);
+
+        if (ledgerEntries.size() != eventStream.size()) {
+            throw new IllegalStateException("Event stream mismatch with ledger entries");
+        }
+    }
+}
