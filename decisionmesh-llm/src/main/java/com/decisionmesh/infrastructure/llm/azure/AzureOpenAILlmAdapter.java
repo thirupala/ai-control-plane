@@ -2,15 +2,17 @@ package com.decisionmesh.infrastructure.llm.azure;
 
 import com.decisionmesh.domain.execution.ExecutionRecord;
 import com.decisionmesh.domain.intent.Intent;
-import com.decisionmesh.infrastructure.llm.prompt.PromptBuilder;
 import com.decisionmesh.domain.plan.PlanStep;
 import com.decisionmesh.infrastructure.llm.LlmAdapter;
 import com.decisionmesh.infrastructure.llm.LlmAdapterException;
 import com.decisionmesh.infrastructure.llm.LlmTimeoutException;
+import com.decisionmesh.infrastructure.llm.prompt.PromptBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -23,7 +25,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -59,6 +60,8 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
     private static final String PROVIDER            = "AZURE_OPENAI";
     private static final String DEFAULT_API_VERSION = "2024-12-01-preview";
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     // ── Config ────────────────────────────────────────────────────────────────
 
     @ConfigProperty(name = "llm.azure.api-key")
@@ -76,7 +79,6 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
     @ConfigProperty(name = "llm.azure.api-version",           defaultValue = "2024-12-01-preview")
     String defaultApiVersion;
 
-    // Cost mirrors OpenAI pricing — you pay the same rates via Azure
     @ConfigProperty(name = "llm.azure.gpt-4o.input-cost-per-1k",       defaultValue = "0.005")
     BigDecimal gpt4oInputCostPer1k;
 
@@ -121,27 +123,36 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
     public Uni<ExecutionRecord> execute(Intent intent, PlanStep step, int attempt) {
         Instant startedAt = Instant.now();
 
-        JsonObject config      = step.getConfigSnapshot();
-        String resourceName    = config.getString("resource_name",   defaultResourceName);
-        String deploymentName  = config.getString("deployment_name", defaultDeployment);
-        String apiVersion      = config.getString("api_version",     defaultApiVersion);
-        String modelHint       = config.getString("model",           deploymentName); // for cost lookup
-        int maxTokens          = config.getInteger("max_tokens",     1024);
-        double temp            = config.getDouble("temperature",     0.2);
-        long timeoutMs         = config.getLong("timeout_ms",        (long) defaultTimeoutMs);
+        // configSnapshot is Map<String, Object> — use PlanStep convenience getters
+        String resourceName   = step.getConfigString("resource_name",   defaultResourceName);
+        String deploymentName = step.getConfigString("deployment_name", defaultDeployment);
+        String apiVersion     = step.getConfigString("api_version",     defaultApiVersion);
+        String modelHint      = step.getConfigString("model",           deploymentName);
+        int    maxTokens      = step.getConfigInt("max_tokens",         1024);
+        double temp           = step.getConfigDouble("temperature",     0.2);
+        long   timeoutMs      = step.getConfigLong("timeout_ms",        (long) defaultTimeoutMs);
 
-        JsonArray messages = PromptBuilder.buildMessages(intent);
+        ArrayNode messages = PromptBuilder.buildMessages(intent);
 
-        // Azure endpoint format
         String endpoint = String.format(
                 "https://%s.openai.azure.com/openai/deployments/%s/chat/completions?api-version=%s",
                 resourceName, deploymentName, apiVersion);
 
-        // Same JSON body as OpenAI — model field is NOT required (deployment encodes it)
-        JsonObject requestBody = new JsonObject()
-                .put("max_tokens", maxTokens)
-                .put("temperature", temp)
-                .put("messages", messages);
+        // Azure body: model field NOT required — deployment name encodes it
+        ObjectNode requestBody = MAPPER.createObjectNode()
+                .put("max_tokens",   maxTokens)
+                .put("temperature",  temp);
+        requestBody.set("messages", messages);
+
+        String requestBodyStr;
+        try {
+            requestBodyStr = MAPPER.writeValueAsString(requestBody);
+        } catch (Exception e) {
+            return Uni.createFrom().failure(
+                    new LlmAdapterException("ADAPTER_ERROR",
+                            "Failed to serialize Azure OpenAI request: " + e.getMessage(),
+                            PROVIDER, deploymentName, attempt, 0L));
+        }
 
         Log.debugf("Azure OpenAI request: resource=%s, deployment=%s, intent=%s, attempt=%d",
                 resourceName, deploymentName, intent.getId(), attempt);
@@ -150,15 +161,15 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
                 .uri(URI.create(endpoint))
                 .timeout(Duration.ofMillis(timeoutMs))
                 .header("Content-Type", "application/json")
-                .header("api-key",      apiKey)           // ← Azure uses api-key, not Authorization
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.encode()))
+                .header("api-key",      apiKey)
+                .POST(HttpRequest.BodyPublishers.ofString(requestBodyStr))
                 .build();
 
-        CompletableFuture<ExecutionRecord> future = (CompletableFuture<ExecutionRecord>) httpClient
-                .sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenApply(response -> parseResponse(
-                        response, intent, step, attempt, modelHint, deploymentName, startedAt))
-                .exceptionally(ex -> { throw mapException(ex, modelHint, attempt, startedAt); });
+        CompletableFuture<ExecutionRecord> future =
+                httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                        .thenApply(response -> parseResponse(
+                                response, intent, step, attempt, modelHint, deploymentName, startedAt))
+                        .exceptionally(ex -> { throw mapException(ex, modelHint, attempt, startedAt); });
 
         return Uni.createFrom().completionStage(future);
     }
@@ -183,23 +194,31 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
                     PROVIDER, deploymentName, attempt, latencyMs);
         }
 
-        JsonObject body    = new JsonObject(response.body());
-        JsonObject usage   = body.getJsonObject("usage");
-        JsonArray  choices = body.getJsonArray("choices");
+        JsonNode body;
+        try {
+            body = MAPPER.readTree(response.body());
+        } catch (Exception e) {
+            throw new LlmAdapterException("INVALID_OUTPUT",
+                    "Azure OpenAI returned unparseable JSON: " + e.getMessage(),
+                    PROVIDER, deploymentName, attempt, latencyMs);
+        }
 
-        if (choices == null || choices.isEmpty()) {
+        JsonNode choices = body.get("choices");
+        JsonNode usage   = body.get("usage");
+
+        if (choices == null || !choices.isArray() || choices.isEmpty()) {
             throw new LlmAdapterException("INVALID_OUTPUT",
                     "Azure OpenAI returned empty choices",
                     PROVIDER, deploymentName, attempt, latencyMs);
         }
 
-        JsonObject choice  = choices.getJsonObject(0);
-        String outputText  = choice.getJsonObject("message").getString("content", "");
-        String finishReason = choice.getString("finish_reason", "");
+        JsonNode choice      = choices.get(0);
+        String  outputText   = choice.path("message").path("content").asText("");
+        String  finishReason = choice.path("finish_reason").asText("");
 
         // Azure content safety: content_filter_results on the choice
-        JsonObject filterResults = choice.getJsonObject("content_filter_results");
-        if (filterResults != null) {
+        JsonNode filterResults = choice.get("content_filter_results");
+        if (filterResults != null && !filterResults.isNull()) {
             checkContentFilterBlock(filterResults, deploymentName, attempt, latencyMs);
         }
 
@@ -209,8 +228,8 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
                     PROVIDER, deploymentName, attempt, latencyMs);
         }
 
-        int promptTokens     = usage != null ? usage.getInteger("prompt_tokens",     0) : 0;
-        int completionTokens = usage != null ? usage.getInteger("completion_tokens", 0) : 0;
+        int promptTokens     = usage != null ? usage.path("prompt_tokens").asInt(0)     : 0;
+        int completionTokens = usage != null ? usage.path("completion_tokens").asInt(0) : 0;
         int totalTokens      = promptTokens + completionTokens;
         BigDecimal cost      = computeCost(modelHint, promptTokens, completionTokens);
 
@@ -222,9 +241,9 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
                 attempt,
                 step.getAdapterId() != null ? step.getAdapterId().toString() : null,
                 latencyMs,
-                cost != null ? cost.doubleValue() : 0.0,
-                null,  // FailureType.null = SUCCESS
-                null   // PlanVersion
+                BigDecimal.valueOf(cost != null ? cost.doubleValue() : 0.0),
+                null,   // FailureType null = SUCCESS
+                null    // PlanVersion
         );
     }
 
@@ -233,16 +252,16 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
      * { "hate": { "filtered": false }, "sexual": { "filtered": false }, ... }
      * If any category has filtered=true, throw POLICY_BLOCK.
      */
-    private void checkContentFilterBlock(JsonObject filterResults,
-                                          String deployment, int attempt, long latencyMs) {
-        for (String category : filterResults.fieldNames()) {
-            JsonObject result = filterResults.getJsonObject(category);
-            if (result != null && Boolean.TRUE.equals(result.getBoolean("filtered"))) {
+    private void checkContentFilterBlock(JsonNode filterResults,
+                                         String deployment, int attempt, long latencyMs) {
+        filterResults.fields().forEachRemaining(entry -> {
+            JsonNode result = entry.getValue();
+            if (result != null && result.path("filtered").asBoolean(false)) {
                 throw new LlmAdapterException("POLICY_BLOCK",
-                        "Azure content filter triggered for category: " + category,
+                        "Azure content filter triggered for category: " + entry.getKey(),
                         PROVIDER, deployment, attempt, latencyMs);
             }
-        }
+        });
     }
 
     // ── Cost ─────────────────────────────────────────────────────────────────
@@ -262,25 +281,25 @@ public class AzureOpenAILlmAdapter implements LlmAdapter {
             inRate  = gpt4oMiniInputCostPer1k;
             outRate = gpt4oMiniOutputCostPer1k;
         } else {
-            // default: gpt-4o
             inRate  = gpt4oInputCostPer1k;
             outRate = gpt4oOutputCostPer1k;
         }
 
-        return inRate .multiply(BigDecimal.valueOf(promptTokens))    .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP)
-             .add(outRate.multiply(BigDecimal.valueOf(completionTokens)).divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP));
+        return inRate .multiply(BigDecimal.valueOf(promptTokens))
+                .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP)
+                .add(outRate.multiply(BigDecimal.valueOf(completionTokens))
+                        .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP));
     }
 
-    // ── Exception mapping ────────────────────────────────────────────────────
+    // ── Exception mapping ─────────────────────────────────────────────────────
 
     private RuntimeException mapException(Throwable ex, String model, int attempt, Instant startedAt) {
         long latencyMs = Duration.between(startedAt, Instant.now()).toMillis();
 
-        // thenApply() wraps exceptions from parseResponse() in CompletionException — unwrap it.
         Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
 
-        if (cause instanceof LlmAdapterException) { return (LlmAdapterException) cause; }
-        if (cause instanceof LlmTimeoutException)  { return (LlmTimeoutException)  cause; }
+        if (cause instanceof LlmAdapterException lae) return lae;
+        if (cause instanceof LlmTimeoutException  lte) return lte;
 
         if (cause.getClass().getSimpleName().toLowerCase().contains("timeout")) {
             return new LlmTimeoutException(

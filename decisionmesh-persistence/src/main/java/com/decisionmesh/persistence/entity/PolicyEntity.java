@@ -1,25 +1,31 @@
 package com.decisionmesh.persistence.entity;
 
-
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.annotations.UuidGenerator;
 import org.hibernate.type.SqlTypes;
 
-import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 @Entity
-@Table(name = "policies", indexes = {
-        @Index(name = "idx_policies_tenant", columnList = "tenant_id"),
-        @Index(name = "idx_policies_phase",  columnList = "tenant_id, phase, is_active")
-})
+@Table(
+        name = "policies",
+        indexes = {
+                @Index(name = "idx_policies_tenant", columnList = "tenant_id"),
+                @Index(name = "idx_policies_phase",  columnList = "tenant_id, phase, is_active")
+        }
+)
 public class PolicyEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @UuidGenerator
     @Column(name = "id", updatable = false, nullable = false)
     public UUID id;
 
@@ -33,16 +39,16 @@ public class PolicyEntity extends PanacheEntityBase {
     public String description;
 
     @Column(name = "scope", nullable = false, length = 50)
-    public String scope = "TENANT";         // TENANT, ORGANIZATION, INTENT_TYPE, ADAPTER
+    public String scope = "TENANT";
 
     @Column(name = "scope_ref_id")
     public UUID scopeRefId;
 
     @Column(name = "phase", nullable = false, length = 50)
-    public String phase = "PRE_EXECUTION";  // PRE_SUBMISSION, PRE_EXECUTION, POST_EXECUTION, CONTINUOUS
+    public String phase = "PRE_EXECUTION";
 
     @Column(name = "enforcement_mode", nullable = false, length = 50)
-    public String enforcementMode = "LOG_ONLY"; // HARD_STOP, WARN_ONLY, LOG_ONLY
+    public String enforcementMode = "LOG_ONLY";
 
     @Column(name = "policy_type", nullable = false, length = 100)
     public String policyType = "CUSTOM_DSL";
@@ -61,25 +67,23 @@ public class PolicyEntity extends PanacheEntityBase {
     @Column(name = "version", nullable = false)
     public int version = 0;
 
+    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    public Instant createdAt = Instant.now();
+    public OffsetDateTime createdAt;
 
+    @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
-    public Instant updatedAt = Instant.now();
+    public OffsetDateTime updatedAt;
 
-    @PreUpdate
-    public void onUpdate() {
-        this.updatedAt = Instant.now();
+    // ── Reactive finders ──────────────────────────────────────────────
+
+    public static Uni<List<PolicyEntity>> findActiveByTenantAndPhase(
+            UUID tenantId, String phase) {
+        return find("tenantId = ?1 and phase = ?2 and isActive = true order by priority asc",
+                tenantId, phase).list();
     }
 
-    // ── Finders ───────────────────────────────────────────────────────
-
-    public static List<PolicyEntity> findActiveByTenantAndPhase(UUID tenantId, String phase) {
-        return list("tenantId = ?1 AND phase = ?2 AND isActive = true ORDER BY priority ASC",
-                tenantId, phase);
-    }
-
-    public static List<PolicyEntity> findActiveByTenant(UUID tenantId) {
-        return list("tenantId = ?1 AND isActive = true ORDER BY priority ASC", tenantId);
+    public static Uni<List<PolicyEntity>> findActiveByTenant(UUID tenantId) {
+        return find("tenantId = ?1 and isActive = true order by priority asc", tenantId).list();
     }
 }

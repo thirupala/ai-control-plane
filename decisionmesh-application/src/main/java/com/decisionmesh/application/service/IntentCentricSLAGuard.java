@@ -73,7 +73,7 @@ public class IntentCentricSLAGuard implements SLAGuard {
                 .invoke(() -> {
 
                     // 1️⃣ Cost guard
-                    if (record.getCost() > intent.getBudget().remaining()) {
+                    if (record.getCost().doubleValue() > intent.getBudget().remaining()) {
                         throw new SLAException("Execution cost exceeds remaining budget");
                     }
 

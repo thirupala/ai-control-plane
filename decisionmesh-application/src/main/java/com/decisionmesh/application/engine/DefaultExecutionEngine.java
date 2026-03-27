@@ -10,6 +10,8 @@ import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Alternative;
 
+import java.math.BigDecimal;
+
 @Alternative
 @Priority(0)
 @ApplicationScoped
@@ -64,7 +66,7 @@ public class DefaultExecutionEngine implements ExecutionEngine {
                     attempt,
                     adapterId,
                     latency,
-                    0.0,               // cost model not implemented yet
+                    BigDecimal.valueOf(0.0),               // cost model not implemented yet
                     failureType,
                     version
             );

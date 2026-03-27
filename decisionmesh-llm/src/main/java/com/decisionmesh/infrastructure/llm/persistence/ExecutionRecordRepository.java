@@ -8,6 +8,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import javax.sql.DataSource;
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -86,13 +87,12 @@ public class ExecutionRecordRepository {
             conn.setAutoCommit(false);
             setRls(conn, intent.getTenantId());
 
-            UUID executionId = record.getId() != null ? record.getId() : record.getExecutionId();
+            UUID executionId = record.getExecutionId();
 
             // Derive status string from isSuccess() — the only method available
             String status        = record.isSuccess() ? "SUCCESS"
                     : (record.getFailureReason() != null ? record.getFailureReason() : "ADAPTER_ERROR");
-            double cost          = record.getCostUsd() != null
-                    ? record.getCostUsd().doubleValue() : record.getCost();
+            double cost          = record.getCost().doubleValue();
             String adapterId     = record.getAdapterId();
             UUID   adapterUuid   = toUuidOrNull(adapterId);
 

@@ -1,159 +1,66 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
-
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-
     <groupId>com.decisionmesh</groupId>
     <artifactId>decisionmesh</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
-
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.version>3.31.1</quarkus.platform.version>
-
+        <quarkus.platform.version>3.25.3</quarkus.platform.version>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <surefire-plugin.version>3.5.2</surefire-plugin.version>
         <failsafe-plugin.version>3.5.2</failsafe-plugin.version>
         <enforcer-plugin.version>3.5.0</enforcer-plugin.version>
-
-        <!-- Disable enforcer by default -->
+        <jandex-plugin.version>3.1.6</jandex-plugin.version>
+        <!--  Disable enforcer by default  -->
         <enforcer.skip>true</enforcer.skip>
     </properties>
-
     <modules>
-        <!-- Core Domain -->
+        <!--  Core Domain — no framework deps, pure Java  -->
         <module>decisionmesh-domain</module>
-
-        <!-- Formal / Non-runtime -->
+        <!--  Formal / Non-runtime  -->
         <module>decisionmesh-formal-spec</module>
         <module>decisionmesh-formal</module>
-
-        <!-- Pure Domain Services -->
+        <!--  Pure Domain Services  -->
         <module>decisionmesh-intelligence</module>
         <module>decisionmesh-control-loop</module>
         <module>decisionmesh-coordination</module>
         <module>decisionmesh-portfolio</module>
-
-        <!-- Governance -->
+        <!--  Governance  -->
         <module>decisionmesh-governance</module>
-
-
+        <!--  LLM Adapters  -->
         <module>decisionmesh-llm</module>
-
-        <!-- Event Sourcing / CQRS -->
+        <!--  Event Sourcing / CQRS  -->
         <module>decisionmesh-cqrs</module>
-
-        <!-- Persistence -->
+        <!--  Persistence — Hibernate Reactive + Panache  -->
         <module>decisionmesh-persistence</module>
-
-        <!-- Streaming -->
+        <!--  Streaming — Kafka / Reactive Messaging  -->
         <module>decisionmesh-streaming</module>
-
-        <!-- Multi-region -->
+        <!--  Multi-region  -->
         <module>decisionmesh-multiregion</module>
-
-        <!-- Security -->
+        <!--  Security — OIDC + API Key auth  -->
         <module>decisionmesh-security</module>
-
-        <!-- Application Orchestrator -->
+        <!--  Application Orchestrator — ports and use-cases  -->
         <module>decisionmesh-application</module>
-
-        <!-- Explainability -->
+        <!--  Explainability  -->
         <module>decisionmesh-explainability</module>
-
-        <!-- Bootstrap Runtime -->
+        <!--  Bootstrap Runtime — Quarkus entry point  -->
         <module>decisionmesh-bootstrap</module>
     </modules>
-
-
     <dependencyManagement>
         <dependencies>
-            <!-- Internal Modules -->
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-domain</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-intelligence</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-control-loop</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-coordination</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-portfolio</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-governance</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-cqrs</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-persistence</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-streaming</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-multiregion</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-security</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-application</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.decisionmesh</groupId>
-                <artifactId>decisionmesh-explainability</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
+            <!--  ══════════════════════════════════════════════
+                             Quarkus BOM — must be first; manages ALL
+                             Quarkus extension versions including
+                             Hibernate Reactive, Mutiny, Vert.x, etc.
+                             Never re-declare quarkus.platform.version
+                             in child poms — it overrides the parent and
+                             causes "Unsupported class file major version"
+                             errors at test time.
+                             ══════════════════════════════════════════════  -->
             <dependency>
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>${quarkus.platform.artifact-id}</artifactId>
@@ -161,9 +68,91 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!--  ══════════════════════════════════════════════
+                             Internal modules
+                             ══════════════════════════════════════════════  -->
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-domain</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-application</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-persistence</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-security</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-llm</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-streaming</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-intelligence</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-control-loop</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-coordination</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-portfolio</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-governance</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-cqrs</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-multiregion</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-explainability</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-formal</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-formal-spec</artifactId>
+                <version>${project.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
-
     <build>
         <pluginManagement>
             <plugins>
@@ -185,8 +174,21 @@
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>${failsafe-plugin.version}</version>
                 </plugin>
+                <!--  Jandex — CDI bean discovery for non-Quarkus modules  -->
+                <plugin>
+                    <groupId>io.smallrye</groupId>
+                    <artifactId>jandex-maven-plugin</artifactId>
+                    <version>${jandex-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <id>make-index</id>
+                            <goals>
+                                <goal>jandex</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
             </plugins>
         </pluginManagement>
     </build>
-
 </project>

@@ -1,24 +1,31 @@
 package com.decisionmesh.contracts.security.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import com.decisionmesh.contracts.security.converter.StringListJsonConverter;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import jakarta.persistence.*;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.annotations.UuidGenerator;
 
-import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
 @Table(
         name = "user_organizations",
         uniqueConstraints = {
-                @UniqueConstraint(columnNames = {"user_id", "organization_id"})
+                @UniqueConstraint(
+                        name = "uq_user_organizations_user_org",
+                        columnNames = {"user_id", "organization_id"}
+                )
         }
 )
 public class UserOrganizationEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @UuidGenerator
     @Column(name = "id", updatable = false, nullable = false)
     public UUID id;
 
@@ -31,19 +38,27 @@ public class UserOrganizationEntity extends PanacheEntityBase {
     @Column(name = "tenant_id", nullable = false)
     public UUID tenantId;
 
-    @Column(name = "role", nullable = false)
+    @Column(name = "role", nullable = false, length = 100)
     public String role;
 
-    @JdbcTypeCode(SqlTypes.JSON)
+    /**
+     * Permissions stored as JSONB.
+     * Uses AttributeConverter instead of @JdbcTypeCode(SqlTypes.JSON) because
+     * Hibernate Reactive's ReactiveJsonJdbcType uses Vert.x JsonObject which
+     * cannot bind JSON arrays — it throws DecodeException on any List field.
+     */
+    @Convert(converter = StringListJsonConverter.class)
     @Column(name = "permissions", nullable = false, columnDefinition = "jsonb")
-    public String permissions = "[]";               // stored as raw JSON string
+    public List<String> permissions = new ArrayList<>();
 
     @Column(name = "is_active", nullable = false)
     public boolean isActive = true;
 
+    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    public Instant createdAt;
+    public OffsetDateTime createdAt;
 
+    @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
-    public Instant updatedAt;
+    public OffsetDateTime updatedAt;
 }

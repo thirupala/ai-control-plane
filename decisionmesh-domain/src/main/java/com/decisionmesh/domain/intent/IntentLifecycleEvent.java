@@ -3,9 +3,11 @@ package com.decisionmesh.domain.intent;
 import com.decisionmesh.domain.event.DomainEvent;
 import com.decisionmesh.domain.event.IntentEventType;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -77,13 +79,8 @@ public final class IntentLifecycleEvent implements DomainEvent {
     private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
 
     @Override
-    public String toJson() {
-        try {
-            return MAPPER.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(this);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException(e);
-        }
+    public Map<String, Object> toJson() {
+        return MAPPER.convertValue(this, new TypeReference<Map<String, Object>>() {});
     }
 
     public IntentPhase fromPhase() {

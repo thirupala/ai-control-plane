@@ -3,11 +3,12 @@ package com.decisionmesh.application.service;
 import com.decisionmesh.application.port.ExecutionRepositoryPort;
 import com.decisionmesh.application.port.LearningEngine;
 import com.decisionmesh.domain.execution.ExecutionRecord;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.logging.Log;
 import io.quarkus.redis.datasource.ReactiveRedisDataSource;
 import io.quarkus.redis.datasource.value.ReactiveValueCommands;
 import io.smallrye.mutiny.Uni;
-import io.vertx.core.json.JsonObject;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Alternative;
@@ -16,7 +17,9 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -46,6 +49,10 @@ public class RedisLearningEngine implements LearningEngine {
 
     private static final String KEY_PREFIX = "learning:";
     private static final double EMA_ALPHA  = 0.1;
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, Object>> MAP_TYPE =
+            new TypeReference<>() {};
 
     @ConfigProperty(name = "learning.cache.ttl-hours", defaultValue = "24")
     int cacheTtlHours;
@@ -87,21 +94,19 @@ public class RedisLearningEngine implements LearningEngine {
 
         return valueCommands.get(key)
                 .onItem().transformToUni(existing -> {
-                    JsonObject current = existing != null
-                            ? new JsonObject(existing)
-                            : defaultProfile();
+                    Map<String, Object> current = existing != null ? parseJson(existing) : defaultProfile();
 
-                    JsonObject updated = applyEma(
+                    Map<String, Object> updated = applyEma(
                             current,
                             record.isSuccess(),
                             record.getLatencyMs(),
-                            record.getCost()      // double primitive — correct field
+                            record.getCost().doubleValue()
                     );
 
                     return valueCommands.setex(
                             key,
                             Duration.ofHours(cacheTtlHours).getSeconds(),
-                            updated.encode()
+                            toJsonString(updated)
                     ).replaceWithVoid();
                 })
                 .onFailure().invoke(ex ->
@@ -115,9 +120,6 @@ public class RedisLearningEngine implements LearningEngine {
      *
      * Applies EMA sequentially for each record.
      * Sequential (not parallel) to avoid racing writes to the same key.
-     *
-     * This is the safety net — per-execution update() calls may have failed
-     * transiently under load. This ensures the final profile is consistent.
      */
     @Override
     public Uni<Void> updateProfiles(UUID intentId) {
@@ -143,7 +145,7 @@ public class RedisLearningEngine implements LearningEngine {
                 .replaceWithVoid();
     }
 
-    // ── Internal ─────────────────────────────────────────────────────────────
+    // ── Internal ──────────────────────────────────────────────────────────────
 
     /**
      * Apply EMA updates sequentially — one per execution record.
@@ -158,72 +160,105 @@ public class RedisLearningEngine implements LearningEngine {
     }
 
     /**
-     * Apply EMA to a JSON profile blob and return the updated blob.
+     * Apply EMA to a profile Map and return the updated Map.
      *
      * Fields updated:
      *   emaSuccessRate  — 1.0 for success, 0.0 for failure
      *   emaLatencyMs    — wall-clock latency
      *   emaCost         — cost in USD (double primitive from record)
      *   failureRate     — derived: 1.0 - emaSuccessRate
-     *   compositeScore  — 40/25/20/15 weighted score (no risk — not in ExecutionRecord)
+     *   compositeScore  — 55/25/20 weighted score
      *   executionCount  — incremented
      *   coldStart       — cleared after 10 executions
      *   isDegraded      — true when emaSuccessRate < 0.60
      *   lastUpdated     — current timestamp
      */
-    private JsonObject applyEma(JsonObject current, boolean success,
-                                long latencyMs, double cost) {
+    private Map<String, Object> applyEma(Map<String, Object> current,
+                                         boolean success,
+                                         long latencyMs,
+                                         double cost) {
 
-        double prevSuccessRate = current.getDouble("emaSuccessRate", 0.8);
-        double prevLatency     = current.getDouble("emaLatencyMs",   2000.0);
-        double prevCost        = current.getDouble("emaCost",        0.01);
-        long   execCount       = current.getLong("executionCount",   0L);
+        double prevSuccessRate = getDouble(current, "emaSuccessRate", 0.8);
+        double prevLatency     = getDouble(current, "emaLatencyMs",   2000.0);
+        double prevCost        = getDouble(current, "emaCost",        0.01);
+        long   execCount       = getLong(current,   "executionCount", 0L);
 
         double newSuccessRate  = ema(prevSuccessRate, success ? 1.0 : 0.0);
         double newLatency      = ema(prevLatency,     latencyMs);
         double newCost         = ema(prevCost,        cost);
         long   newExecCount    = execCount + 1;
         boolean nowDegraded    = newSuccessRate < 0.60;
-        boolean nowColdStart   = newExecCount < 10;
+        boolean nowColdStart   = newExecCount  < 10;
 
-        // compositeScore without riskScore (not available in ExecutionRecord)
-        // risk weight (15%) folded into success rate weight → 55% success
-        double latencyScore    = 1.0 - Math.min(newLatency / 10_000.0, 1.0);
-        double costScore       = 1.0 - Math.min(newCost    / 0.10,     1.0);
-        double compositeScore  = 0.55 * newSuccessRate
+        // compositeScore: risk weight (15%) folded into success rate → 55%
+        double latencyScore   = 1.0 - Math.min(newLatency / 10_000.0, 1.0);
+        double costScore      = 1.0 - Math.min(newCost    / 0.10,     1.0);
+        double compositeScore = 0.55 * newSuccessRate
                 + 0.25 * latencyScore
                 + 0.20 * costScore;
 
-        return new JsonObject()
-                .put("emaSuccessRate", newSuccessRate)
-                .put("emaLatencyMs",   newLatency)
-                .put("emaCost",        newCost)
-                .put("failureRate",    1.0 - newSuccessRate)
-                .put("compositeScore", compositeScore)
-                .put("executionCount", newExecCount)
-                .put("coldStart",      nowColdStart)
-                .put("isDegraded",     nowDegraded)
-                .put("lastUpdated",    Instant.now().toString());
+        Map<String, Object> updated = new HashMap<>();
+        updated.put("emaSuccessRate", newSuccessRate);
+        updated.put("emaLatencyMs",   newLatency);
+        updated.put("emaCost",        newCost);
+        updated.put("failureRate",    1.0 - newSuccessRate);
+        updated.put("compositeScore", compositeScore);
+        updated.put("executionCount", newExecCount);
+        updated.put("coldStart",      nowColdStart);
+        updated.put("isDegraded",     nowDegraded);
+        updated.put("lastUpdated",    Instant.now().toString());
+        return updated;
     }
 
-    private JsonObject defaultProfile() {
-        return new JsonObject()
-                .put("emaSuccessRate", 0.8)
-                .put("emaLatencyMs",   2000.0)
-                .put("emaCost",        0.01)
-                .put("failureRate",    0.2)
-                .put("compositeScore", 0.5)
-                .put("executionCount", 0L)
-                .put("coldStart",      true)
-                .put("isDegraded",     false);
+    private Map<String, Object> defaultProfile() {
+        Map<String, Object> profile = new HashMap<>();
+        profile.put("emaSuccessRate", 0.8);
+        profile.put("emaLatencyMs",   2000.0);
+        profile.put("emaCost",        0.01);
+        profile.put("failureRate",    0.2);
+        profile.put("compositeScore", 0.5);
+        profile.put("executionCount", 0L);
+        profile.put("coldStart",      true);
+        profile.put("isDegraded",     false);
+        return profile;
     }
+
+    // ── JSON helpers (replaces JsonObject.getDouble / getLong / encode) ───────
+
+    private Map<String, Object> parseJson(String json) {
+        try {
+            return MAPPER.readValue(json, MAP_TYPE);
+        } catch (Exception e) {
+            Log.warnf("Failed to parse Redis profile JSON — using default: %s", e.getMessage());
+            return defaultProfile();
+        }
+    }
+
+    private String toJsonString(Map<String, Object> map) {
+        try {
+            return MAPPER.writeValueAsString(map);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to serialise EMA profile to JSON", e);
+        }
+    }
+
+    private double getDouble(Map<String, Object> map, String key, double defaultValue) {
+        Object v = map.get(key);
+        if (v instanceof Number n) return n.doubleValue();
+        return defaultValue;
+    }
+
+    private long getLong(Map<String, Object> map, String key, long defaultValue) {
+        Object v = map.get(key);
+        if (v instanceof Number n) return n.longValue();
+        return defaultValue;
+    }
+
+    // ── Key + EMA ─────────────────────────────────────────────────────────────
 
     /**
      * Redis key: learning:{intentId}:{adapterId}
-     *
      * Scoped to intent+adapter because ExecutionRecord has no tenantId.
-     * The AdapterLearningPortImpl reads from adapter_performance_profiles (DB),
-     * not from Redis — so this key is for hot-cache purposes only.
      */
     private String buildKey(UUID intentId, String adapterId) {
         return KEY_PREFIX + intentId + ":" + adapterId;

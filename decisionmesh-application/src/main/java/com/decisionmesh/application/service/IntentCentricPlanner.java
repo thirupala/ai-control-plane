@@ -12,7 +12,6 @@ import com.decisionmesh.domain.plan.PlanStrategy;
 import com.decisionmesh.domain.value.PlanVersion;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
-import io.vertx.core.json.JsonObject;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -44,9 +43,9 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class IntentCentricPlanner implements Planner {
 
-    private static final double EPSILON_DEFAULT      = 0.10;
-    private static final double FAILURE_PENALTY      = 10.0;
-    private static final double DEGRADED_SCORE       = Double.MAX_VALUE; // always last
+    private static final double EPSILON_DEFAULT = 0.10;
+    private static final double FAILURE_PENALTY = 10.0;
+    private static final double DEGRADED_SCORE  = Double.MAX_VALUE;
 
     @ConfigProperty(name = "planner.epsilon",          defaultValue = "0.10")
     double epsilon;
@@ -70,7 +69,6 @@ public class IntentCentricPlanner implements Planner {
         List<String>      allowed     = constraints != null
                 ? constraints.allowedAdapters() : List.of();
 
-        // Load stats: specific list if allowedAdapters is set, otherwise all for intentType
         Uni<Map<String, AdapterStats>> statsFuture = (allowed != null && !allowed.isEmpty())
                 ? learningPort.getStats(intent.getTenantId(), allowed)
                 : learningPort.getStatsForIntentType(intent.getTenantId(), intent.getIntentType());
@@ -91,16 +89,14 @@ public class IntentCentricPlanner implements Planner {
             return buildColdStartPlan(intent);
         }
 
-        ObjectiveType objective  = resolveObjectiveType(intent);
-        boolean       explore    = random.nextDouble() < epsilon;
+        ObjectiveType objective = resolveObjectiveType(intent);
+        boolean       explore   = random.nextDouble() < epsilon;
 
-        // Sort by score ascending (lower = better in our scoring function)
         List<AdapterStats> ranked = stats.values().stream()
-                .filter(a -> !a.isDegraded())              // hard-filter degraded if enough data
+                .filter(a -> !a.isDegraded())
                 .sorted(Comparator.comparingDouble(a -> score(objective, a)))
                 .collect(Collectors.toList());
 
-        // If all adapters are degraded, fall back to including them (degraded > no adapter)
         if (ranked.isEmpty()) {
             Log.warnf("All adapters degraded — using degraded adapters as last resort: intent=%s",
                     intent.getId());
@@ -113,53 +109,41 @@ public class IntentCentricPlanner implements Planner {
         boolean      wasExploration = false;
 
         if (explore && ranked.size() > 1) {
-            // Epsilon-greedy: pick a random non-best adapter as primary
-            int idx = 1 + random.nextInt(ranked.size() - 1);
-            primary       = ranked.get(idx);
-            wasExploration = true;
+            int idx           = 1 + random.nextInt(ranked.size() - 1);
+            primary           = ranked.get(idx);
+            wasExploration    = true;
             Log.infof("Planner exploration: selected rank-%d adapter. intent=%s, epsilon=%.2f",
                     idx + 1, intent.getId(), epsilon);
         } else {
             primary = ranked.get(0);
         }
 
-        // Fallback: best adapter that is NOT the primary
         AdapterStats fallback = ranked.stream()
                 .filter(a -> !a.adapterId().equals(primary.adapterId()))
                 .findFirst()
                 .orElse(null);
 
-        List<PlanStep> steps    = new ArrayList<>();
-        UUID           planId   = UUID.randomUUID();
+        UUID planId = UUID.randomUUID();
 
-        // PRIMARY step
-        steps.add(buildPlanStep(planId, intent, primary, 0, "PRIMARY", false, null));
+        PlanStep primaryStep = buildPlanStep(
+                planId, intent, primary, 0, "PRIMARY", false, null);
 
-        // FALLBACK step (when enabled and a second adapter exists)
-        if (fallbackEnabled && fallback != null) {
-            steps.add(buildFallbackStep(planId, intent, fallback));
-        }
-
-        String strategy = (fallbackEnabled && fallback != null)
-                ? "RANKED_FALLBACK" : "SINGLE_ADAPTER";
-
-        String notes = buildPlannerNotes(objective, primary, fallback, wasExploration);
-
-        Log.infof("Plan built: intent=%s, strategy=%s, primary=%s(%s), fallback=%s, exploration=%b",
-                intent.getId(), strategy,
-                primary.provider(), primary.model(),
-                fallback != null ? fallback.provider() + "(" + fallback.model() + ")" : "none",
-                wasExploration);
-
-        // Build ordered adapter ID list for Plan.create() (primary first, fallback second)
-        List<String> adapterIds = new java.util.ArrayList<>();
+        List<String> adapterIds = new ArrayList<>();
         adapterIds.add(primary.adapterId().toString());
+
         if (fallbackEnabled && fallback != null) {
             adapterIds.add(fallback.adapterId().toString());
         }
 
         PlanStrategy planStrategy = (fallbackEnabled && fallback != null)
-                ? PlanStrategy.RANKED_FALLBACK : PlanStrategy.SINGLE_ADAPTER;
+                ? PlanStrategy.RANKED_FALLBACK
+                : PlanStrategy.SINGLE_ADAPTER;
+
+        Log.infof("Plan built: intent=%s, strategy=%s, primary=%s(%s), fallback=%s, exploration=%b",
+                intent.getId(), planStrategy,
+                primary.provider(), primary.model(),
+                fallback != null ? fallback.provider() + "(" + fallback.model() + ")" : "none",
+                wasExploration);
 
         return Plan.create(
                 intent.getId(),
@@ -174,19 +158,16 @@ public class IntentCentricPlanner implements Planner {
 
     /**
      * Cold-start plan — no stats available yet.
-     * Creates a plan with the first known adapter and no fallback.
-     * The LlmExecutionEngine will perform dynamic selection via AdapterRegistry.
+     * Creates a plan with a default adapter and no fallback.
+     * LlmExecutionEngine will perform dynamic selection via AdapterRegistry.
      */
     private Plan buildColdStartPlan(Intent intent) {
-
-        Log.infof("Cold-start plan: assigning default adapter for intent=%s",
-                intent.getId());
-
+        Log.infof("Cold-start plan: assigning default adapter for intent=%s", intent.getId());
         return Plan.create(
                 intent.getId(),
                 PlanVersion.initial(),
                 PlanStrategy.SINGLE_ADAPTER,
-                List.of("openai"),   //   FIX
+                List.of("openai"),
                 0.0,
                 0L,
                 0.5
@@ -198,8 +179,6 @@ public class IntentCentricPlanner implements Planner {
     private PlanStep buildPlanStep(UUID planId, Intent intent, AdapterStats adapter,
                                    int order, String stepType,
                                    boolean conditional, Map<String, Object> conditionExpr) {
-        JsonObject config = buildConfigSnapshot(adapter, intent);
-
         return PlanStep.builder()
                 .planId(planId)
                 .intentId(intent.getId())
@@ -209,7 +188,7 @@ public class IntentCentricPlanner implements Planner {
                 .stepType(stepType)
                 .conditional(conditional)
                 .conditionExpr(conditionExpr)
-                .configSnapshot(config)
+                .configSnapshot(buildConfigSnapshot(adapter, intent))
                 .provider(adapter.provider())
                 .model(adapter.model())
                 .region(adapter.region())
@@ -217,8 +196,6 @@ public class IntentCentricPlanner implements Planner {
     }
 
     private PlanStep buildFallbackStep(UUID planId, Intent intent, AdapterStats adapter) {
-        JsonObject config = buildConfigSnapshot(adapter, intent);
-
         return PlanStep.builder()
                 .planId(planId)
                 .intentId(intent.getId())
@@ -231,7 +208,7 @@ public class IntentCentricPlanner implements Planner {
                         "trigger",       "PREVIOUS_STEP_FAILED",
                         "failure_types", List.of("TIMEOUT", "ADAPTER_ERROR", "RATE_LIMITED")
                 ))
-                .configSnapshot(config)
+                .configSnapshot(buildConfigSnapshot(adapter, intent))
                 .provider(adapter.provider())
                 .model(adapter.model())
                 .region(adapter.region())
@@ -239,24 +216,25 @@ public class IntentCentricPlanner implements Planner {
     }
 
     /**
-     * Build configSnapshot JsonObject for a PlanStep.
-     * LlmAdapter.execute() reads model, max_tokens, timeout_ms, temperature from this.
+     * Build configSnapshot as Map<String, Object> for a PlanStep.
+     *
+     * Replaces JsonObject.put() chain — Map.of() cannot be used here because
+     * Azure adds an extra field conditionally, so we use a mutable HashMap.
+     *
+     * LlmAdapter.execute() reads: provider, model, max_tokens, timeout_ms, temperature
+     * via PlanStep.getConfigString() / getConfigInt() / getConfigLong() / getConfigDouble().
      */
-    private JsonObject buildConfigSnapshot(AdapterStats adapter, Intent intent) {
-        int  maxTokens = resolveMaxTokens(intent);
-        long timeoutMs = resolveTimeoutMs(intent);
+    private Map<String, Object> buildConfigSnapshot(AdapterStats adapter, Intent intent) {
+        Map<String, Object> config = new HashMap<>();
+        config.put("provider",    adapter.provider());
+        config.put("model",       adapter.model());
+        config.put("max_tokens",  resolveMaxTokens(intent));
+        config.put("timeout_ms",  resolveTimeoutMs(intent));
+        config.put("temperature", resolveTemperature(intent));
 
-        JsonObject config = new JsonObject()
-                .put("provider",    adapter.provider())
-                .put("model",       adapter.model())
-                .put("max_tokens",  maxTokens)
-                .put("timeout_ms",  timeoutMs)
-                .put("temperature", resolveTemperature(intent));
-
-        // Azure needs resource_name and deployment_name
+        // Azure needs deployment_name — resource_name comes from adapter config in DB
         if ("AZURE_OPENAI".equalsIgnoreCase(adapter.provider())) {
             config.put("deployment_name", adapter.model());
-            // resource_name comes from adapter.config in DB — engine will read it
         }
 
         return config;
@@ -277,7 +255,7 @@ public class IntentCentricPlanner implements Planner {
 
         double failurePenalty = stats.failureRate() * FAILURE_PENALTY;
         double costPenalty    = stats.avgCost();
-        double latencyPenalty = stats.avgLatency() / 1000.0;    // normalise to seconds
+        double latencyPenalty = stats.avgLatency() / 1000.0;
         double riskPenalty    = stats.riskScore();
 
         return switch (objective) {
@@ -292,33 +270,29 @@ public class IntentCentricPlanner implements Planner {
 
     private ObjectiveType resolveObjectiveType(Intent intent) {
         if (intent.getObjective() != null) {
-            try {
-                return intent.getObjective().objectiveType();
-            } catch (Exception ignored) {}
+            try { return intent.getObjective().objectiveType(); }
+            catch (Exception ignored) {}
         }
-        return ObjectiveType.QUALITY; // safe default
+        return ObjectiveType.QUALITY;
     }
 
     private int resolveMaxTokens(Intent intent) {
-        if (intent.getConstraints() != null && intent.getConstraints().maxTokens() > 0) {
+        if (intent.getConstraints() != null && intent.getConstraints().maxTokens() > 0)
             return intent.getConstraints().maxTokens();
-        }
-        return 1024; // default
+        return 1024;
     }
 
     private long resolveTimeoutMs(Intent intent) {
-        if (intent.getConstraints() != null && intent.getConstraints().timeoutSeconds() > 0) {
+        if (intent.getConstraints() != null && intent.getConstraints().timeoutSeconds() > 0)
             return intent.getConstraints().timeoutSeconds() * 1000L;
-        }
-        return 30_000L; // 30s default
+        return 30_000L;
     }
 
     private double resolveTemperature(Intent intent) {
-        ObjectiveType obj = resolveObjectiveType(intent);
-        return switch (obj) {
-            case QUALITY, RISK -> 0.0;   // deterministic for quality/safety
-            case COST          -> 0.2;   // slightly creative but predictable
-            case LATENCY       -> 0.1;   // low temp = faster token generation
+        return switch (resolveObjectiveType(intent)) {
+            case QUALITY, RISK -> 0.0;
+            case COST          -> 0.2;
+            case LATENCY       -> 0.1;
         };
     }
 
@@ -328,12 +302,10 @@ public class IntentCentricPlanner implements Planner {
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("Objective: %s. ", objective));
         sb.append(String.format("Primary: %s(%s) score=%.4f. ",
-                primary.provider(), primary.model(),
-                score(objective, primary)));
+                primary.provider(), primary.model(), score(objective, primary)));
         if (fallback != null) {
             sb.append(String.format("Fallback: %s(%s) score=%.4f. ",
-                    fallback.provider(), fallback.model(),
-                    score(objective, fallback)));
+                    fallback.provider(), fallback.model(), score(objective, fallback)));
         }
         if (wasExploration) {
             sb.append(String.format("Epsilon-greedy exploration (ε=%.2f).", epsilon));

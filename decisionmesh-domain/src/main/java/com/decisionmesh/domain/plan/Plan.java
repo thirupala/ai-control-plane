@@ -2,58 +2,80 @@ package com.decisionmesh.domain.plan;
 
 import com.decisionmesh.domain.intent.Intent;
 import com.decisionmesh.domain.value.PlanVersion;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.vertx.core.json.Json;
-import io.vertx.core.json.JsonObject;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Immutable domain object representing an execution plan for an Intent.
+ *
+ * Serialization: call toJson(mapper) / fromJson(json, mapper) — callers are
+ * responsible for supplying a correctly configured ObjectMapper (JavaTimeModule
+ * registered, WRITE_DATES_AS_TIMESTAMPS disabled). In Quarkus, inject the
+ * CDI ObjectMapper bean.
+ *
+ * Transient fields (intent, steps) are never serialized.
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public final class Plan {
 
-    private final UUID           planId;
-    private final UUID           intentId;
-    private final PlanVersion    version;
-    private final PlanStrategy   strategy;
-    private final List<String>   orderedAdapters;  // adapter IDs — original field
+    // ── Persisted fields ──────────────────────────────────────────────────────
 
-    private final double  predictedCost;
-    private final long    predictedLatency;
-    private final double  objectiveScore;
-    private final Instant createdAt;
+    private final UUID          planId;
+    private final UUID          intentId;
+    private final PlanVersion   version;
+    private final PlanStrategy  strategy;
+    private final List<String>  orderedAdapters;
+    private final double        predictedCost;
+    private final long          predictedLatency;
+    private final double        objectiveScore;
+    private final Instant       createdAt;
 
-    // ── Added fields (not serialized — carried in memory only) ───────────────
-    // Intent is never persisted here; Plan.fromJson() leaves it null.
-    // LlmExecutionEngine attaches it via withIntent().
-    private transient Intent     intent;
-    private transient List<PlanStep> steps; // built lazily from orderedAdapters
+    // ── Transient fields — never serialized, carried in memory only ───────────
 
-    // ── Original constructor ──────────────────────────────────────────────────
+    @JsonIgnore
+    private Intent intent;          // attached by LlmExecutionEngine via withIntent()
 
-    private Plan(UUID planId,
-                 UUID intentId,
-                 PlanVersion version,
-                 PlanStrategy strategy,
-                 List<String> orderedAdapters,
-                 double predictedCost,
-                 long predictedLatency,
-                 double objectiveScore,
-                 Instant createdAt) {
+    @JsonIgnore
+    private List<PlanStep> steps;   // built lazily from orderedAdapters
 
-        this.planId          = planId;
-        this.intentId        = intentId;
-        this.version         = version;
-        this.strategy        = strategy;
-        this.orderedAdapters = List.copyOf(orderedAdapters);
-        this.predictedCost   = predictedCost;
+    // ── Constructor ───────────────────────────────────────────────────────────
+
+    @JsonCreator
+    private Plan(
+            @JsonProperty("planId")           UUID planId,
+            @JsonProperty("intentId")         UUID intentId,
+            @JsonProperty("version")          PlanVersion version,
+            @JsonProperty("strategy")         PlanStrategy strategy,
+            @JsonProperty("orderedAdapters")  List<String> orderedAdapters,
+            @JsonProperty("predictedCost")    double predictedCost,
+            @JsonProperty("predictedLatency") long predictedLatency,
+            @JsonProperty("objectiveScore")   double objectiveScore,
+            @JsonProperty("createdAt")        Instant createdAt) {
+
+        this.planId           = planId;
+        this.intentId         = intentId;
+        this.version          = version;
+        this.strategy         = strategy;
+        // Guard: orderedAdapters may be null when deserializing older JSON
+        this.orderedAdapters  = (orderedAdapters != null)
+                ? List.copyOf(orderedAdapters)
+                : List.of();
+        this.predictedCost    = predictedCost;
         this.predictedLatency = predictedLatency;
-        this.objectiveScore  = objectiveScore;
-        this.createdAt       = createdAt;
+        this.objectiveScore   = objectiveScore;
+        this.createdAt        = createdAt;
     }
 
-    // ── Original factory (used by IntentCentricPlanner) ───────────────────────
+    // ── Factory ───────────────────────────────────────────────────────────────
 
     public static Plan create(UUID intentId,
                               PlanVersion version,
@@ -76,17 +98,32 @@ public final class Plan {
         );
     }
 
-    // ── Methods needed by LlmExecutionEngine ─────────────────────────────────
+    // ── Transient attachment ──────────────────────────────────────────────────
+
+    /**
+     * Returns a copy of this Plan with the Intent attached in memory.
+     * Called by LlmExecutionEngine before dispatching to an adapter.
+     * The intent is never serialized.
+     */
+    public Plan withIntent(Intent intent) {
+        Plan copy = new Plan(
+                planId, intentId, version, strategy, orderedAdapters,
+                predictedCost, predictedLatency, objectiveScore, createdAt
+        );
+        copy.intent = intent;
+        return copy;
+    }
+
+    // ── Step accessors ────────────────────────────────────────────────────────
+
+    // TODO: move getPrimaryStep() and getFallbackStep() to LlmExecutionEngine
+    //       or a dedicated PlanStepFactory — step construction is orchestration
+    //       logic and does not belong in the domain object.
 
     /**
      * The primary (first attempt) PlanStep.
-     *
-     * Built from orderedAdapters[0].  adapterId is the String ID from the planner.
-     * configSnapshot is empty — the engine's AdapterRegistry will load the real
-     * config from the adapters table and inject it via PlanStep.withAdapter().
-     *
-     * If the plan has no adapters (cold-start), returns a step with adapterId=null
-     * which signals LlmExecutionEngine to use dynamic selection via AdapterRegistry.
+     * If orderedAdapters is empty (cold-start), returns a step with no adapterId —
+     * LlmExecutionEngine will use AdapterRegistry for dynamic selection.
      */
     public PlanStep getPrimaryStep() {
         if (orderedAdapters.isEmpty()) {
@@ -95,7 +132,7 @@ public final class Plan {
                     .intentId(intentId)
                     .stepOrder(0)
                     .stepType("PRIMARY")
-                    .configSnapshot(new JsonObject())
+                    .configSnapshot(Map.of())
                     .build();
         }
 
@@ -107,14 +144,13 @@ public final class Plan {
                 .stepOrder(0)
                 .stepType("PRIMARY")
                 .conditional(false)
-                .configSnapshot(new JsonObject().put("adapterId", adapterId))
+                .configSnapshot(Map.of("adapterId", adapterId))
                 .build();
     }
 
     /**
-     * The fallback PlanStep — null when strategy is SINGLE_ADAPTER
-     * or when only one adapter is in orderedAdapters.
-     *
+     * The fallback PlanStep.
+     * Returns null when strategy is SINGLE_ADAPTER or fewer than two adapters exist.
      * Triggers on TIMEOUT, ADAPTER_ERROR, or RATE_LIMITED.
      */
     public PlanStep getFallbackStep() {
@@ -134,56 +170,44 @@ public final class Plan {
                         "trigger",       "PREVIOUS_STEP_FAILED",
                         "failure_types", List.of("TIMEOUT", "ADAPTER_ERROR", "RATE_LIMITED")
                 ))
-                .configSnapshot(new JsonObject().put("adapterId", adapterId))
+                .configSnapshot(Map.of("adapterId", adapterId))
                 .build();
-    }
-
-    /**
-     * The Intent this plan was created for.
-     * Attached in memory by LlmExecutionEngine — null when loaded from JSON/DB.
-     * Always non-null during execution (engine calls withIntent() before execute()).
-     */
-    public Intent getIntent() {
-        return intent;
-    }
-
-    /**
-     * Returns a copy of this Plan with the Intent attached.
-     * Called by LlmExecutionEngine before dispatching to an adapter.
-     */
-    public Plan withIntent(Intent intent) {
-        Plan copy = new Plan(planId, intentId, version, strategy, orderedAdapters,
-                predictedCost, predictedLatency, objectiveScore, createdAt);
-        copy.intent = intent;
-        return copy;
     }
 
     // ── JSON ──────────────────────────────────────────────────────────────────
 
-    public String toJson() {
-        return Json.encode(this);
-    }
-
-    public static Plan fromJson(String json) {
-        ObjectMapper MAPPER = new ObjectMapper();
+    public String toJson(ObjectMapper mapper) {
         try {
-            return MAPPER.readValue(json, Plan.class);
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
+            return mapper.writeValueAsString(this);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(
+                    "Failed to serialise Plan id=" + planId + " to JSON", e);
         }
     }
 
-    // ── Original getters ──────────────────────────────────────────────────────
+    public static Plan fromJson(String json, ObjectMapper mapper) {
+        try {
+            return mapper.readValue(json, Plan.class);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Failed to deserialise Plan from JSON", e);
+        }
+    }
 
-    public UUID          getPlanId()           { return planId; }
-    public UUID          getIntentId()         { return intentId; }
-    public PlanVersion   getVersion()          { return version; }
-    public PlanStrategy  getStrategy()         { return strategy; }
-    public List<String>  getOrderedAdapters()  { return orderedAdapters; }
-    public double        getPredictedCost()    { return predictedCost; }
-    public long          getPredictedLatency() { return predictedLatency; }
-    public double        getObjectiveScore()   { return objectiveScore; }
-    public Instant       getCreatedAt()        { return createdAt; }
+    // ── Getters ───────────────────────────────────────────────────────────────
+
+    public UUID         getPlanId()           { return planId; }
+    public UUID         getIntentId()         { return intentId; }
+    public PlanVersion  getVersion()          { return version; }
+    public PlanStrategy getStrategy()         { return strategy; }
+    public List<String> getOrderedAdapters()  { return orderedAdapters; }
+    public double       getPredictedCost()    { return predictedCost; }
+    public long         getPredictedLatency() { return predictedLatency; }
+    public double       getObjectiveScore()   { return objectiveScore; }
+    public Instant      getCreatedAt()        { return createdAt; }
+
+    @JsonIgnore
+    public Intent       getIntent()           { return intent; }
 
     // ── Helper ────────────────────────────────────────────────────────────────
 

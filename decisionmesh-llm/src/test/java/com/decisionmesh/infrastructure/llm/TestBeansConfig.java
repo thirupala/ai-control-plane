@@ -23,11 +23,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static io.quarkus.hibernate.orm.panache.Panache.getEntityManager;
-
 /**
  * Test-scope CDI producers satisfying all unsatisfied dependencies for
  * OpenAILlmAdapterTest. Signatures match the actual project interfaces.
+ *
+ * All stubs are no-ops or return safe defaults.
+ * No blocking ORM calls — flush() returns Uni.voidItem() directly
+ * since the reactive stack manages flushing inside Panache.withTransaction().
  */
 @ApplicationScoped
 public class TestBeansConfig {
@@ -41,6 +43,7 @@ public class TestBeansConfig {
             public Uni<Void> append(ExecutionRecord r) {
                 return Uni.createFrom().voidItem();
             }
+
             @Override
             public Uni<List<ExecutionRecord>> findByIntentId(UUID id) {
                 return Uni.createFrom().item(List.of());
@@ -57,16 +60,18 @@ public class TestBeansConfig {
             public Uni<Void> save(Intent intent) {
                 return Uni.createFrom().voidItem();
             }
+
             @Override
             public Uni<Intent> findById(UUID tenantId, UUID intentId) {
-                return Uni.createFrom().failure(new UnsupportedOperationException("test stub"));
+                return Uni.createFrom().failure(
+                        new UnsupportedOperationException("test stub"));
             }
+
             @Override
             public Uni<Void> flush() {
-                return Uni.createFrom().item(() -> {
-                    getEntityManager().flush();
-                    return null;
-                });
+                // Reactive stack: Panache.withTransaction() handles flushing.
+                // No EntityManager available or needed in test context.
+                return Uni.createFrom().voidItem();
             }
         };
     }
@@ -79,7 +84,6 @@ public class TestBeansConfig {
     }
 
     // ── PlanRepositoryPort ────────────────────────────────────────────────────
-    // save() → Uni<Void>, findAllByIntentId(UUID) → List<Plan>
 
     @Produces @Alternative @Priority(1) @ApplicationScoped
     public PlanRepositoryPort planRepositoryPort() {
@@ -88,13 +92,16 @@ public class TestBeansConfig {
             public Uni<Void> save(Plan plan) {
                 return Uni.createFrom().voidItem();
             }
+
             @Override
             public Uni<List<Plan>> findAllByIntentId(UUID intentId) {
                 return Uni.createFrom().item(List.of());
             }
+
             @Override
             public Uni<Plan> findLatestByIntentId(UUID intentId) {
-                return Uni.createFrom().failure(new UnsupportedOperationException("test stub"));
+                return Uni.createFrom().failure(
+                        new UnsupportedOperationException("test stub"));
             }
         };
     }
@@ -108,6 +115,7 @@ public class TestBeansConfig {
             public Uni<Map<String, AdapterStats>> getStats(UUID tenantId, List<String> ids) {
                 return Uni.createFrom().item(Map.of());
             }
+
             @Override
             public Uni<Map<String, AdapterStats>> getStatsForIntentType(UUID tenantId, String type) {
                 return Uni.createFrom().item(Map.of());
@@ -124,6 +132,7 @@ public class TestBeansConfig {
             public Uni<Void> update(ExecutionRecord r) {
                 return Uni.createFrom().voidItem();
             }
+
             @Override
             public Uni<Void> updateProfiles(UUID id) {
                 return Uni.createFrom().voidItem();
@@ -140,7 +149,6 @@ public class TestBeansConfig {
     }
 
     // ── TelemetrySink ─────────────────────────────────────────────────────────
-    // send(IntentTelemetryEvent) — not emit(String, Object)
 
     @Produces @Alternative @Priority(1) @ApplicationScoped
     public TelemetrySink telemetrySink() {
@@ -153,14 +161,13 @@ public class TestBeansConfig {
     }
 
     // ── TelemetryPublisher ────────────────────────────────────────────────────
-    // publish(IntentPhase, UUID, UUID, long) — first param is IntentPhase not Object
 
     @Produces @Alternative @Priority(1) @ApplicationScoped
     public TelemetryPublisher telemetryPublisher() {
         return new TelemetryPublisher() {
             @Override
             public Uni<Void> publish(IntentPhase phase, UUID tenantId,
-                                      UUID intentId, long version) {
+                                     UUID intentId, long version) {
                 return Uni.createFrom().voidItem();
             }
         };
@@ -179,38 +186,43 @@ public class TestBeansConfig {
     }
 
     // ── LockManager ───────────────────────────────────────────────────────────
-    // Includes forceRelease(String) and isLocked(String)
 
     @Produces @Alternative @Priority(1) @ApplicationScoped
     public LockManager lockManager() {
         return new LockManager() {
             @Override
             public Uni<LockToken> acquireWithRetry(String key, Duration ttl,
-                                                    int retries, Duration backoff) {
+                                                   int retries, Duration backoff) {
                 return Uni.createFrom().failure(
                         new UnsupportedOperationException("test stub"));
             }
+
             @Override
             public Uni<LockToken> acquire(String partitionKey, Duration ttl) {
                 return Uni.createFrom().failure(
                         new UnsupportedOperationException("test stub"));
             }
+
             @Override
             public Uni<Boolean> release(LockToken token) {
                 return Uni.createFrom().item(true);
             }
+
             @Override
             public Uni<Boolean> extend(LockToken token, Duration d) {
                 return Uni.createFrom().item(true);
             }
+
             @Override
             public Uni<Boolean> exists(String key) {
                 return Uni.createFrom().item(false);
             }
+
             @Override
             public Uni<Boolean> forceRelease(String partitionKey) {
                 return Uni.createFrom().item(true);
             }
+
             @Override
             public Uni<Boolean> isLocked(String partitionKey) {
                 return Uni.createFrom().item(false);
@@ -219,7 +231,6 @@ public class TestBeansConfig {
     }
 
     // ── ReconciliationService ─────────────────────────────────────────────────
-    // reconcile(UUID tenantId, UUID intentId) — two UUID params
 
     @Produces @Alternative @Priority(1) @ApplicationScoped
     public ReconciliationService reconciliationService() {

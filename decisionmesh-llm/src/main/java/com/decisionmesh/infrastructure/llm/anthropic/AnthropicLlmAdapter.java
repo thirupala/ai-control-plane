@@ -2,15 +2,17 @@ package com.decisionmesh.infrastructure.llm.anthropic;
 
 import com.decisionmesh.domain.execution.ExecutionRecord;
 import com.decisionmesh.domain.intent.Intent;
-import com.decisionmesh.infrastructure.llm.prompt.PromptBuilder;
 import com.decisionmesh.domain.plan.PlanStep;
 import com.decisionmesh.infrastructure.llm.LlmAdapter;
 import com.decisionmesh.infrastructure.llm.LlmAdapterException;
 import com.decisionmesh.infrastructure.llm.LlmTimeoutException;
+import com.decisionmesh.infrastructure.llm.prompt.PromptBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -23,7 +25,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.UUID;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -40,6 +42,8 @@ public class AnthropicLlmAdapter implements LlmAdapter {
     private static final String PROVIDER         = "ANTHROPIC";
     private static final String DEFAULT_ENDPOINT = "https://api.anthropic.com/v1/messages";
     private static final String API_VERSION      = "2023-06-01";
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     // ── Config ────────────────────────────────────────────────────────────────
 
@@ -90,18 +94,29 @@ public class AnthropicLlmAdapter implements LlmAdapter {
     public Uni<ExecutionRecord> execute(Intent intent, PlanStep step, int attempt) {
         Instant startedAt = Instant.now();
 
-        JsonObject config = step.getConfigSnapshot();
-        String model      = config.getString("model",       defaultModel);
-        int maxTokens     = config.getInteger("max_tokens", 1024);
-        String endpoint   = config.getString("endpoint",    DEFAULT_ENDPOINT);
-        long timeoutMs    = config.getLong("timeout_ms",    (long) defaultTimeoutMs);
+        // configSnapshot is now Map<String, Object> — use PlanStep convenience getters
+        String model    = step.getConfigString("model",    defaultModel);
+        int maxTokens   = step.getConfigInt("max_tokens",  1024);
+        String endpoint = step.getConfigString("endpoint", DEFAULT_ENDPOINT);
+        long timeoutMs  = step.getConfigLong("timeout_ms", (long) defaultTimeoutMs);
 
-        JsonArray messages = PromptBuilder.buildMessages(intent);
+        // Build request body using Jackson ObjectNode
+        ArrayNode messages = PromptBuilder.buildMessages(intent);
 
-        JsonObject requestBody = new JsonObject()
-                .put("model", model)
-                .put("max_tokens", maxTokens)
-                .put("messages", messages);
+        ObjectNode requestBody = MAPPER.createObjectNode()
+                .put("model",      model)
+                .put("max_tokens", maxTokens);
+        requestBody.set("messages", messages);
+
+        String requestBodyStr;
+        try {
+            requestBodyStr = MAPPER.writeValueAsString(requestBody);
+        } catch (Exception e) {
+            return Uni.createFrom().failure(
+                    new LlmAdapterException("ADAPTER_ERROR",
+                            "Failed to serialize Anthropic request: " + e.getMessage(),
+                            PROVIDER, model, attempt, 0L));
+        }
 
         Log.debugf("Anthropic request: model=%s, intent=%s, attempt=%d",
                 model, intent.getId(), attempt);
@@ -112,16 +127,16 @@ public class AnthropicLlmAdapter implements LlmAdapter {
                 .header("Content-Type",      "application/json")
                 .header("x-api-key",         apiKey)
                 .header("anthropic-version", API_VERSION)
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.encode()))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBodyStr))
                 .build();
 
-        CompletableFuture<ExecutionRecord> future = (CompletableFuture<ExecutionRecord>) httpClient
-                .sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenApply(response -> parseResponse(response, intent, step, attempt, model, startedAt))
-                .exceptionally(ex -> {
-                    RuntimeException mapped = mapException(ex, model, attempt, startedAt);
-                    throw mapped;
-                });
+        CompletableFuture<ExecutionRecord> future =
+                httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                        .thenApply(response ->
+                                parseResponse(response, intent, step, attempt, model, startedAt))
+                        .exceptionally(ex -> {
+                            throw mapException(ex, model, attempt, startedAt);
+                        });
 
         return Uni.createFrom().completionStage(future);
     }
@@ -151,11 +166,20 @@ public class AnthropicLlmAdapter implements LlmAdapter {
                     PROVIDER, model, attempt, latencyMs);
         }
 
-        JsonObject body    = new JsonObject(response.body());
-        JsonObject usage   = body.getJsonObject("usage");
-        JsonArray  content = body.getJsonArray("content");
+        // Parse response body with Jackson
+        JsonNode body;
+        try {
+            body = MAPPER.readTree(response.body());
+        } catch (Exception e) {
+            throw new LlmAdapterException("INVALID_OUTPUT",
+                    "Anthropic returned unparseable JSON: " + e.getMessage(),
+                    PROVIDER, model, attempt, latencyMs);
+        }
 
-        if (content == null || content.isEmpty()) {
+        JsonNode content = body.get("content");
+        JsonNode usage   = body.get("usage");
+
+        if (content == null || !content.isArray() || content.isEmpty()) {
             throw new LlmAdapterException("INVALID_OUTPUT",
                     "Anthropic returned empty content array",
                     PROVIDER, model, attempt, latencyMs);
@@ -163,16 +187,15 @@ public class AnthropicLlmAdapter implements LlmAdapter {
 
         // Find first text block in content array
         String outputText = "";
-        for (int i = 0; i < content.size(); i++) {
-            JsonObject block = content.getJsonObject(i);
-            if ("text".equals(block.getString("type"))) {
-                outputText = block.getString("text", "");
+        for (JsonNode block : content) {
+            if ("text".equals(safeText(block, "type"))) {
+                outputText = safeText(block, "text");
                 break;
             }
         }
 
-        int inputTokens  = usage != null ? usage.getInteger("input_tokens",  0) : 0;
-        int outputTokens = usage != null ? usage.getInteger("output_tokens", 0) : 0;
+        int inputTokens  = usage != null ? usage.path("input_tokens").asInt(0)  : 0;
+        int outputTokens = usage != null ? usage.path("output_tokens").asInt(0) : 0;
         int totalTokens  = inputTokens + outputTokens;
         BigDecimal cost  = computeCost(model, inputTokens, outputTokens);
 
@@ -184,9 +207,9 @@ public class AnthropicLlmAdapter implements LlmAdapter {
                 attempt,
                 step.getAdapterId() != null ? step.getAdapterId().toString() : null,
                 latencyMs,
-                cost != null ? cost.doubleValue() : 0.0,
-                null,  // FailureType null = SUCCESS
-                null   // PlanVersion
+                BigDecimal.valueOf(cost.doubleValue()),
+                null,   // FailureType null = SUCCESS
+                null    // PlanVersion
         );
     }
 
@@ -207,8 +230,10 @@ public class AnthropicLlmAdapter implements LlmAdapter {
             outRate = sonnetOutputCostPer1k;
         }
 
-        return inRate .multiply(BigDecimal.valueOf(inputTokens)) .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP)
-             .add(outRate.multiply(BigDecimal.valueOf(outputTokens)).divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP));
+        return inRate .multiply(BigDecimal.valueOf(inputTokens))
+                .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP)
+                .add(outRate.multiply(BigDecimal.valueOf(outputTokens))
+                        .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP));
     }
 
     // ── Exception mapping ────────────────────────────────────────────────────
@@ -216,11 +241,11 @@ public class AnthropicLlmAdapter implements LlmAdapter {
     private RuntimeException mapException(Throwable ex, String model, int attempt, Instant startedAt) {
         long latencyMs = Duration.between(startedAt, Instant.now()).toMillis();
 
-        // thenApply() wraps exceptions from parseResponse() in CompletionException — unwrap it.
+        // thenApply() wraps exceptions from parseResponse() in CompletionException — unwrap it
         Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
 
-        if (cause instanceof LlmAdapterException) { return (LlmAdapterException) cause; }
-        if (cause instanceof LlmTimeoutException)  { return (LlmTimeoutException)  cause; }
+        if (cause instanceof LlmAdapterException lae) return lae;
+        if (cause instanceof LlmTimeoutException  lte) return lte;
 
         if (cause.getClass().getSimpleName().toLowerCase().contains("timeout")) {
             return new LlmTimeoutException(
@@ -230,5 +255,12 @@ public class AnthropicLlmAdapter implements LlmAdapter {
         return new LlmAdapterException("ADAPTER_ERROR",
                 "Anthropic request failed: " + cause.getMessage(),
                 PROVIDER, model, attempt, latencyMs);
+    }
+
+    // ── JsonNode helpers ──────────────────────────────────────────────────────
+
+    private String safeText(JsonNode node, String field) {
+        JsonNode child = node.get(field);
+        return (child == null || child.isNull()) ? "" : child.asText();
     }
 }
