@@ -33,7 +33,6 @@ public interface LockManager {
      * @param ttl           Lock time-to-live
      * @param maxRetries    Maximum retry attempts
      * @param initialBackoff Initial backoff duration (doubles each retry)
-     * @return LockToken if eventually acquired, or failure after exhausting retries
      */
     Uni<LockToken> acquireWithRetry(String partitionKey, Duration ttl,
                                     int maxRetries, Duration initialBackoff);
@@ -73,4 +72,5 @@ public interface LockManager {
      * @return true if deleted, false if not found
      */
     Uni<Boolean> forceRelease(String partitionKey);
+    Uni<Boolean> exists(String partitionKey);
 }

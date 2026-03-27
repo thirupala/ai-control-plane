@@ -31,10 +31,7 @@ public final class IntentStateChangedEvent implements DomainEvent {
         this.occurredAt = occurredAt;
     }
 
-    @Override
-    public String toJson() {
-        return Json.encode(this);
-    }
+
 
     @Override
     public UUID eventId() {
@@ -86,6 +83,20 @@ public final class IntentStateChangedEvent implements DomainEvent {
     @Override
     public int hashCode() {
         return Objects.hash(eventId, intentId, tenantId, version, eventType, occurredAt);
+    }
+
+    @Override
+    public String toJson() {
+        return new io.vertx.core.json.JsonObject()
+                .put("eventId",       eventId    != null ? eventId.toString()    : null)
+                .put("intentId",      intentId   != null ? intentId.toString()   : null)
+                .put("aggregateId",   intentId   != null ? intentId.toString()   : null)  // ✅ aggregateId = intentId
+                .put("aggregateType", "Intent")
+                .put("tenantId",      tenantId   != null ? tenantId.toString()   : null)
+                .put("version",       version)
+                .put("eventType",     eventType  != null ? eventType.name()      : null)
+                .put("occurredAt",    occurredAt != null ? occurredAt.toString() : null)
+                .encode();
     }
 
 }

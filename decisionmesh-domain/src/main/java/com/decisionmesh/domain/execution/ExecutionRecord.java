@@ -1,8 +1,11 @@
 package com.decisionmesh.domain.execution;
 
 import com.decisionmesh.domain.value.PlanVersion;
-import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -15,20 +18,26 @@ public final class ExecutionRecord {
     private final int attemptNumber;
     private final String adapterId;
     private final long latencyMs;
-    private final double cost; // internal primitive
+    private final double cost;
     private final FailureType failureType;
     private final PlanVersion planVersion;
     private final Instant timestamp;
 
-    public ExecutionRecord(UUID intentId,
-                           int attemptNumber,
-                           String adapterId,
-                           long latencyMs,
-                           double cost,
-                           FailureType failureType,
-                           PlanVersion planVersion) {
-
-        this.executionId = UUID.randomUUID();
+    // ✅ Jackson constructor (CRITICAL FIX)
+    @JsonCreator
+    public ExecutionRecord(
+            @JsonAlias("id")
+            @JsonProperty("executionId") UUID executionId,
+            @JsonProperty("intentId") UUID intentId,
+            @JsonProperty("attemptNumber") int attemptNumber,
+            @JsonProperty("adapterId") String adapterId,
+            @JsonProperty("latencyMs") long latencyMs,
+            @JsonProperty("cost") double cost,
+            @JsonProperty("failureType") FailureType failureType,
+            @JsonProperty("planVersion") PlanVersion planVersion,
+            @JsonProperty("timestamp") Instant timestamp
+    ) {
+        this.executionId = executionId != null ? executionId : UUID.randomUUID();
         this.intentId = intentId;
         this.attemptNumber = attemptNumber;
         this.adapterId = adapterId;
@@ -36,9 +45,10 @@ public final class ExecutionRecord {
         this.cost = cost;
         this.failureType = failureType;
         this.planVersion = planVersion;
-        this.timestamp = Instant.now();
+        this.timestamp = timestamp != null ? timestamp : Instant.now();
     }
 
+    // ✅ Factory for domain usage
     public static ExecutionRecord of(UUID intentId,
                                      int attemptNumber,
                                      String adapterId,
@@ -48,19 +58,25 @@ public final class ExecutionRecord {
                                      PlanVersion version) {
 
         return new ExecutionRecord(
+                UUID.randomUUID(),
                 intentId,
                 attemptNumber,
                 adapterId,
                 latencyMs,
                 cost,
                 failureType,
-                version
+                version,
+                Instant.now()
         );
     }
 
     // ===============================
-    // Semantic Helpers (IMPORTANT)
+    // JSON
     // ===============================
+
+    // ✅ SINGLE shared mapper (FIXED)
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new JavaTimeModule());
 
     public static ExecutionRecord fromJson(String json) {
         try {
@@ -70,6 +86,17 @@ public final class ExecutionRecord {
         }
     }
 
+    public String toJson() {
+        try {
+            return MAPPER.writeValueAsString(this);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to serialize ExecutionRecord", e);
+        }
+    }
+
+    // ===============================
+    // Semantic Helpers
+    // ===============================
 
     public boolean isSuccess() {
         return failureType == null;
@@ -85,20 +112,6 @@ public final class ExecutionRecord {
 
     public UUID getId() {
         return executionId;
-    }
-
-    // ===============================
-    // JSON
-    // ===============================
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    public String toJson() {
-        try {
-            return MAPPER.writeValueAsString(this);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize ExecutionRecord", e);
-        }
     }
 
     // ===============================

@@ -24,6 +24,11 @@
             <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-domain</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-llm</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <dependency>
             <groupId>com.decisionmesh</groupId>
@@ -80,6 +85,10 @@
         <dependency>
             <groupId>org.eclipse.microprofile.jwt</groupId>
             <artifactId>microprofile-jwt-auth-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-flyway</artifactId>
         </dependency>
     </dependencies>
 

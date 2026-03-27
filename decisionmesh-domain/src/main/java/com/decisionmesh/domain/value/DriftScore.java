@@ -1,10 +1,15 @@
 package com.decisionmesh.domain.value;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonValue;
+
 public final class DriftScore {
 
     private final double value;
 
-    private DriftScore(double value) {
+    @JsonCreator
+    private DriftScore(@JsonProperty("value") double value) {
         if (value < 0.0)
             throw new IllegalArgumentException("Drift score must be >= 0");
 
@@ -15,6 +20,7 @@ public final class DriftScore {
         return new DriftScore(value);
     }
 
+    @JsonValue
     public double value() {
         return value;
     }

@@ -9,39 +9,47 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 
 import java.util.List;
+import java.util.UUID;
 
 @ApplicationScoped
 public class PostgresIntentEventRepository
         implements IntentEventRepositoryPort,
         PanacheRepository<IntentEventEntity> {
 
-    @Override
-    @Transactional
-    public Uni<Void> appendAll(List<DomainEvent> events) {
+    public void appendAllSync(List<DomainEvent> events) {
 
+        if (events == null || events.isEmpty()) {
+            return;
+        }
+
+        for (DomainEvent event : events) {
+
+            IntentEventEntity entity = new IntentEventEntity();
+
+            entity.eventId       = event.eventId();
+            entity.intentId      = event.aggregateId();
+//            entity.aggregateId   = event.aggregateId();
+            entity.aggregateType = event.aggregateType();
+            entity.tenantId      = event.tenantId();
+            entity.version       = event.version();
+            entity.eventType     = event.eventType().name();
+            entity.payload       = event.toJson();
+            entity.occurredAt    = event.occurredAt();
+
+            getEntityManager().persist(entity);
+        }
+    }
+
+    @Override
+    public Uni<Void> appendAll(List<DomainEvent> events) {
         if (events == null || events.isEmpty()) {
             return Uni.createFrom().voidItem();
         }
-
-        return Uni.createFrom().item(() -> {
-
-            for (DomainEvent event : events) {
-
-                IntentEventEntity entity = new IntentEventEntity();
-
-                entity.eventId = event.eventId();
-                entity.tenantId = event.tenantId();
-                entity.aggregateId = event.aggregateId();
-                entity.aggregateType = event.aggregateType();
-                entity.version = event.version();
-                entity.eventType = event.eventType().name();
-                entity.payload = event.toJson();
-                entity.occurredAt = event.occurredAt();
-
-                persist(entity);   // ← Panache method
-            }
-
-            return null;
-        }).replaceWithVoid();
+        return Uni.createFrom()
+                .item(() -> { appendAllSync(events); return null; })
+                .runSubscriptionOn(
+                        io.smallrye.mutiny.infrastructure.Infrastructure.getDefaultWorkerPool()
+                )
+                .replaceWithVoid();
     }
 }

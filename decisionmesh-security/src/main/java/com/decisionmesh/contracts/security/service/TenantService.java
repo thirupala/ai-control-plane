@@ -1,8 +1,8 @@
 package com.decisionmesh.contracts.security.service;
 
-import com.decisionmesh.contracts.security.entity.Organization;
-import com.decisionmesh.contracts.security.entity.Tenant;
-import com.decisionmesh.contracts.security.entity.TenantIdempotency;
+import com.decisionmesh.contracts.security.entity.OrganizationEntity;
+import com.decisionmesh.contracts.security.entity.TenantEntity;
+import com.decisionmesh.contracts.security.entity.TenantIdempotencyEntity;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.persistence.PersistenceException;
 import jakarta.transaction.Transactional;
@@ -20,65 +20,69 @@ public class TenantService {
             throw new IllegalArgumentException("Idempotency key required");
         }
 
-        // 1️⃣ Check existing idempotency record
-        TenantIdempotency existing =
-                TenantIdempotency.find("idempotencyKey", idempotencyKey)
+        //  Check existing idempotency record
+        TenantIdempotencyEntity existing =
+                TenantIdempotencyEntity.find("idempotencyKey", idempotencyKey)
                         .firstResult();
 
         if (existing != null) {
             return existing.tenantId;
         }
 
-        // 2️⃣ Create new tenant
-        UUID tenantId = UUID.randomUUID();
-
-        Tenant tenant = new Tenant();
-        tenant.tenantId = tenantId;
-        tenant.organizationName = organizationName;
-        tenant.createdAt = Instant.now();
-        tenant.active = true;
+        //  Create new tenant using correct TenantEntity
+        TenantEntity tenant   = new TenantEntity();
+        tenant.id=UUID.randomUUID();
+        tenant.externalId     = idempotencyKey;          //  was tenant.tenantId
+        tenant.name           = organizationName;         //  was tenant.organizationName
+        tenant.organizationId = UUID.randomUUID();        //  placeholder — updated when org created
+        tenant.status         = "ACTIVE";                 //  was tenant.active = true
+        tenant.config         = "{}";
+        tenant.createdAt      = Instant.now();
+        tenant.updatedAt      = Instant.now();            //  was missing
         tenant.persist();
 
-        // 3️⃣ Store idempotency record
-        TenantIdempotency idem = new TenantIdempotency();
-        idem.id = UUID.randomUUID();
+        //  Store idempotency record
+        TenantIdempotencyEntity idem = new TenantIdempotencyEntity();
+        idem.id             = UUID.randomUUID();
         idem.idempotencyKey = idempotencyKey;
-        idem.tenantId = tenantId;
-        idem.createdAt = Instant.now();
+        idem.tenantId       = tenant.id;                  //  use generated id not UUID.randomUUID()
+        idem.createdAt      = Instant.now();
 
         try {
             idem.persistAndFlush();
         } catch (PersistenceException e) {
-            // 4️⃣ Handle race condition (concurrent same key)
-            TenantIdempotency race =
-                    TenantIdempotency.find("idempotencyKey", idempotencyKey)
+            //  Handle race condition
+            TenantIdempotencyEntity race =
+                    TenantIdempotencyEntity.find("idempotencyKey", idempotencyKey)
                             .firstResult();
-
             if (race != null) {
                 return race.tenantId;
             }
             throw e;
         }
 
-        return tenantId;
+        return tenant.id;                                  //  return generated id
     }
 
-    // ===============================
-    // DEFAULT ORGANIZATION
-    // ===============================
-
     @Transactional
-    public Organization createDefaultOrganization(
-            UUID tenantId,
-            String organizationName
-    ) {
-        Organization org = new Organization();
-        org.organizationId = UUID.randomUUID();
-        org.tenantId = tenantId;
-        org.name = organizationName;
+    public OrganizationEntity createDefaultOrganization(UUID tenantId, String organizationName) {
+        OrganizationEntity org = new OrganizationEntity();
+        org.id        = UUID.randomUUID();          //  was org.organizationId
+        org.tenantId  = tenantId;
+        org.name      = organizationName;
+        org.config    = "{}";                       //  NOT NULL in DB
+        org.isActive  = true;                       //  was org.active
         org.createdAt = Instant.now();
-        org.active = true;
+        org.updatedAt = Instant.now();              //  NOT NULL in DB
         org.persist();
+
+        //  Update tenant.organizationId now that org exists
+        TenantEntity tenant = TenantEntity.findById(tenantId);
+        if (tenant != null) {
+            tenant.organizationId = org.id;
+            tenant.updatedAt      = Instant.now();
+        }
+
         return org;
     }
 }

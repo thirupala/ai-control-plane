@@ -1,8 +1,8 @@
 package com.decisionmesh.contracts.security.resource;
 
 import com.decisionmesh.contracts.security.context.TenantContext;
-import com.decisionmesh.contracts.security.entity.ApiKey;
-import com.decisionmesh.contracts.security.entity.Organization;
+import com.decisionmesh.contracts.security.entity.ApiKeyEntity;
+import com.decisionmesh.contracts.security.entity.OrganizationEntity;
 import com.decisionmesh.contracts.security.service.ApiKeyService;
 import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.inject.Inject;
@@ -146,7 +146,7 @@ public class ApiKeyResource {
      * In a multi-org setup, this should be specified in the request.
      */
     private UUID getDefaultOrganizationId(String tenantId) {
-        Organization org = Organization.find("tenantId = ?1 ORDER BY createdAt ASC", tenantId)
+        OrganizationEntity org = OrganizationEntity.find("tenantId = ?1 ORDER BY createdAt ASC", tenantId)
                 .firstResult();
 
         if (org == null) {
@@ -157,7 +157,7 @@ public class ApiKeyResource {
             );
         }
 
-        return org.organizationId;
+        return org.id;
     }
 
     // ============================================
@@ -184,7 +184,7 @@ public class ApiKeyResource {
 
         LOG.debugf("Listing API keys for tenant %s (activeOnly: %s)", tenantId, activeOnly);
 
-        List<ApiKey> keys = apiKeyService.listKeys(tenantId, activeOnly);
+        List<ApiKeyEntity> keys = apiKeyService.listKeys(tenantId, activeOnly);
 
         List<KeyListItem> items = keys.stream()
                 .map(key -> new KeyListItem(

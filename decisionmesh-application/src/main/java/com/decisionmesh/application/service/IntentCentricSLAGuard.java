@@ -27,7 +27,7 @@ public class IntentCentricSLAGuard implements SLAGuard {
 
                     // 2️⃣ Phase correctness
                     if (intent.getPhase() != IntentPhase.PLANNED &&
-                            intent.getPhase() != IntentPhase.RETRY_SCHEDULED) {
+                            intent.getPhase() != IntentPhase.EXECUTING) {
                         throw new SLAException("Intent not eligible for execution");
                     }
 
@@ -48,12 +48,16 @@ public class IntentCentricSLAGuard implements SLAGuard {
                     }
 
                     // 6️⃣ Time-to-live constraint
-                    Duration ttl = intent.getConstraints().maxExecutionWindow();
-                    if (ttl != null) {
+                    int windowDays = Math.toIntExact(intent.getConstraints().maxExecutionWindow());
+
+                    if (windowDays > 0) {   //   only enforce if > 0
+                        Duration ttl = Duration.ofDays(windowDays);
+
                         Duration age = Duration.between(
                                 intent.getCreatedAt(),
                                 Instant.now()
                         );
+
                         if (age.compareTo(ttl) > 0) {
                             throw new SLAException("Execution window expired");
                         }
@@ -74,7 +78,7 @@ public class IntentCentricSLAGuard implements SLAGuard {
                     }
 
                     // 2️⃣ Latency guard (convert ms → Duration)
-                    Duration maxLatency = intent.getConstraints().maxLatency();
+                    Duration maxLatency = Duration.ofDays(intent.getConstraints().maxLatency());
 
                     if (maxLatency != null) {
                         Duration actualLatency = Duration.ofMillis(record.getLatencyMs());

@@ -2,6 +2,7 @@ package com.decisionmesh.application.telemetry;
 
 import com.decisionmesh.domain.intent.IntentPhase;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -13,7 +14,9 @@ public final class IntentTelemetryEvent {
     private final long version;
     private final IntentPhase phase;
     private final Instant timestamp;
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new JavaTimeModule());
 
     public IntentTelemetryEvent(UUID tenantId,
                                 UUID intentId,
