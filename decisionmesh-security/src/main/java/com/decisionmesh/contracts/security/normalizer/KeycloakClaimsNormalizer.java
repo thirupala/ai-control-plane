@@ -35,10 +35,10 @@ public class KeycloakClaimsNormalizer implements OidcClaimsNormalizer {
 
         return new AuthenticatedIdentity(
                 UUID.fromString(jwt.getSubject()),
-                // fallback to a nil UUID if tenant_id not yet in token
+                // Use sub as tenantId fallback until tenant_id claim is mapped
                 jwt.<String>getClaim("tenant_id") != null
                         ? UUID.fromString(jwt.<String>getClaim("tenant_id"))
-                        : UUID.fromString("00000000-0000-0000-0000-000000000000"),
+                        : UUID.fromString(jwt.getSubject()),
                 jwt.getClaim("email"),
                 jwt.getClaim("preferred_username"),
                 roles

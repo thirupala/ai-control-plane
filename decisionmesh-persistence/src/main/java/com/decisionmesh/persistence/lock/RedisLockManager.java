@@ -7,10 +7,10 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.quarkus.logging.Log;
+import io.quarkus.redis.client.reactive.ReactiveRedisClient;
 import io.quarkus.redis.datasource.ReactiveRedisDataSource;
 import io.quarkus.redis.datasource.keys.ReactiveKeyCommands;
 import io.quarkus.redis.datasource.value.ReactiveValueCommands;
-import io.quarkus.redis.datasource.value.SetArgs;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -18,18 +18,22 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
-
 
 @ApplicationScoped
 public class RedisLockManager implements LockManager {
 
     private static final String LOCK_PREFIX = "lock:intent:";
 
+    // ── ReactiveRedisDataSource commands (used for GET, DEL, PEXPIRE, EXISTS) ──
     private final ReactiveValueCommands<String, String> valueCommands;
     private final ReactiveKeyCommands<String> keyCommands;
     private final MeterRegistry meterRegistry;
 
+    // ── Raw client (used for SET NX PX — valueCommands.set returns Uni<Void>,
+    //    which loses the null/OK distinction needed to detect NX contention) ──
+    private final ReactiveRedisClient redisClient;
 
     // Metrics
     private final Counter lockAcquiredCounter;
@@ -42,12 +46,14 @@ public class RedisLockManager implements LockManager {
     int defaultTtlSeconds;
 
     @Inject
-    public RedisLockManager(ReactiveRedisDataSource redis, MeterRegistry meterRegistry) {
+    public RedisLockManager(ReactiveRedisDataSource redis,
+                            ReactiveRedisClient redisClient,
+                            MeterRegistry meterRegistry) {
         this.valueCommands = redis.value(String.class);
         this.keyCommands = redis.key();
+        this.redisClient = redisClient;
         this.meterRegistry = meterRegistry;
 
-        // Initialize metrics
         this.lockAcquiredCounter = Counter.builder("controlplane.lock.acquired")
                 .description("Total locks successfully acquired")
                 .register(meterRegistry);
@@ -69,6 +75,18 @@ public class RedisLockManager implements LockManager {
                 .register(meterRegistry);
     }
 
+    /**
+     * Acquire a distributed lock using SET key token NX PX ttlMs.
+     *
+     * WHY raw redisClient instead of valueCommands.set(key, token, SetArgs):
+     *   ReactiveValueCommands.set(..., SetArgs) returns Uni<Void>.
+     *   Void is always null — we cannot distinguish "NX blocked (key existed)"
+     *   from "SET succeeded" using the Void result.
+     *   The raw ReactiveRedisClient.set(...) returns Uni<Response> where:
+     *     - response is non-null ("OK") on success
+     *     - response is null when NX blocked the write
+     *   This is the only correct way to detect lock contention at acquire time.
+     */
     @Override
     public Uni<LockToken> acquire(String partitionKey, Duration ttl) {
         String key = LOCK_PREFIX + partitionKey;
@@ -76,30 +94,31 @@ public class RedisLockManager implements LockManager {
         Instant acquiredAt = Instant.now();
         Instant expiresAt = acquiredAt.plus(ttl);
 
-        SetArgs args = new SetArgs()
-                .nx()  // Only set if not exists
-                .px(ttl.toMillis());
-
         Log.debugf("Attempting to acquire lock: key=%s, token=%s, ttl=%dms",
                 key, token, ttl.toMillis());
 
-        return valueCommands.set(key, token, args)
-                .onItem().transform(result -> {
-                    // SetArgs.nx() returns null if key already exists
-                    if (result == null) {
+        // SET key token NX PX <ttlMs>
+        // Response is non-null ("OK") on success, null when NX blocked
+        return redisClient.set(List.of(key, token, "NX", "PX", String.valueOf(ttl.toMillis())))
+                .onItem().transform(response -> {
+                    if (response == null) {
+                        // NX failed — key already exists, lock is held by another holder
                         lockFailedCounter.increment();
                         Log.debugf("Lock acquisition failed (already held): key=%s", key);
-                        throw new LockContentionException("Lock already held for partition: " + partitionKey);
+                        throw new LockContentionException(
+                                "Lock already held for partition: " + partitionKey);
                     }
 
                     lockAcquiredCounter.increment();
                     Log.infof("Lock acquired: key=%s, token=%s, expires=%s", key, token, expiresAt);
-
                     return new LockToken(partitionKey, token, acquiredAt, expiresAt);
                 })
                 .onFailure().invoke(failure -> {
-                    lockFailedCounter.increment();
-                    Log.errorf(failure, "Lock acquisition error: key=%s", key);
+                    if (!(failure instanceof LockContentionException)) {
+                        // Only log unexpected Redis errors, not expected contention
+                        lockFailedCounter.increment();
+                        Log.errorf(failure, "Lock acquisition error: key=%s", key);
+                    }
                 });
     }
 
@@ -124,7 +143,6 @@ public class RedisLockManager implements LockManager {
         Log.debugf("Attempting to extend lock: key=%s, token=%s, extension=%dms",
                 key, token.token(), extension.toMillis());
 
-        // Get current token, verify it matches, then extend TTL
         return valueCommands.get(key)
                 .onItem().transformToUni(currentToken -> {
                     if (currentToken == null) {
@@ -138,18 +156,16 @@ public class RedisLockManager implements LockManager {
                         return Uni.createFrom().item(false);
                     }
 
-                    // Token matches, extend the TTL
                     return keyCommands.pexpire(key, extension.toMillis())
                             .onItem().transform(extended -> {
                                 if (Boolean.TRUE.equals(extended)) {
                                     lockExtendedCounter.increment();
-                                    Log.infof("Lock extended: key=%s, token=%s, extension=%dms",
-                                            key, token.token(), extension.toMillis());
+                                    Log.infof("Lock extended: key=%s, extension=%dms",
+                                            key, extension.toMillis());
                                     return true;
-                                } else {
-                                    Log.warnf("Lock extension pexpire failed: key=%s", key);
-                                    return false;
                                 }
+                                Log.warnf("Lock extension pexpire failed: key=%s", key);
+                                return false;
                             });
                 })
                 .onFailure().invoke(failure ->
@@ -164,7 +180,6 @@ public class RedisLockManager implements LockManager {
 
         Log.debugf("Attempting to release lock: key=%s, token=%s", key, token.token());
 
-        // Get current token, verify it matches, then delete
         return valueCommands.get(key)
                 .onItem().transformToUni(currentToken -> {
                     if (currentToken == null) {
@@ -178,22 +193,17 @@ public class RedisLockManager implements LockManager {
                         return Uni.createFrom().item(false);
                     }
 
-                    // Token matches, delete the lock
                     return keyCommands.del(key)
                             .onItem().transform(deletedCount -> {
                                 boolean released = deletedCount != null && deletedCount > 0;
-
                                 if (released) {
                                     lockReleasedCounter.increment();
-
-                                    // Record lock hold duration
-                                    long holdDuration = System.currentTimeMillis() - token.acquiredAt().toEpochMilli();
+                                    long holdDuration = System.currentTimeMillis()
+                                            - token.acquiredAt().toEpochMilli();
                                     lockHoldTime.record(Duration.ofMillis(holdDuration));
-
-                                    Log.infof("Lock released: key=%s, token=%s, held_for=%dms",
-                                            key, token.token(), holdDuration);
+                                    Log.infof("Lock released: key=%s, held_for=%dms",
+                                            key, holdDuration);
                                 }
-
                                 return released;
                             });
                 })
@@ -206,8 +216,6 @@ public class RedisLockManager implements LockManager {
     @Override
     public Uni<Boolean> isLocked(String partitionKey) {
         String key = LOCK_PREFIX + partitionKey;
-
-        // exists() returns Uni<Boolean> in Quarkus 3.x
         return keyCommands.exists(key)
                 .onItem().transform(exists -> Boolean.TRUE.equals(exists));
     }
@@ -215,10 +223,15 @@ public class RedisLockManager implements LockManager {
     @Override
     public Uni<Boolean> forceRelease(String partitionKey) {
         String key = LOCK_PREFIX + partitionKey;
-
         Log.warnf("FORCE RELEASE (admin): key=%s", key);
-
         return keyCommands.del(key)
                 .onItem().transform(count -> count != null && count > 0);
+    }
+
+    @Override
+    public Uni<Boolean> exists(String partitionKey) {
+        String key = LOCK_PREFIX + partitionKey;
+        return keyCommands.exists(key)
+                .onItem().transform(exists -> Boolean.TRUE.equals(exists));
     }
 }

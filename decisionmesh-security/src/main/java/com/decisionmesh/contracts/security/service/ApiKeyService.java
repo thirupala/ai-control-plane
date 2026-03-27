@@ -1,6 +1,6 @@
 package com.decisionmesh.contracts.security.service;
 
-import com.decisionmesh.contracts.security.entity.ApiKey;
+import com.decisionmesh.contracts.security.entity.ApiKeyEntity;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 import org.jboss.logging.Logger;
@@ -55,7 +55,7 @@ public class ApiKeyService {
         String keyHash = hashKey(fullKey);
 
         // Create entity
-        ApiKey apiKey = new ApiKey();
+        ApiKeyEntity apiKey = new ApiKeyEntity();
         apiKey.keyId = UUID.randomUUID();
         apiKey.organizationId = organizationId;
         apiKey.tenantId = tenantId;
@@ -89,7 +89,7 @@ public class ApiKeyService {
      * Validate an API key and return the associated entity if valid.
      */
     @Transactional
-    public ApiKey validateAndGetKey(String providedKey) {
+    public ApiKeyEntity validateAndGetKey(String providedKey) {
         if (providedKey == null || providedKey.isBlank()) {
             return null;
         }
@@ -102,7 +102,7 @@ public class ApiKeyService {
 
         // Hash and lookup
         String keyHash = hashKey(providedKey);
-        ApiKey apiKey = ApiKey.findByHash(keyHash);
+        ApiKeyEntity apiKey = ApiKeyEntity.findByHash(keyHash);
 
         if (apiKey == null) {
             LOG.debugf("API key not found: %s...", providedKey.substring(0, Math.min(15, providedKey.length())));
@@ -133,7 +133,7 @@ public class ApiKeyService {
      */
     @Transactional
     public boolean revokeKeyForTenant(UUID keyId, UUID tenantId) {
-        ApiKey apiKey = ApiKey.findById(keyId);
+        ApiKeyEntity apiKey = ApiKeyEntity.findById(keyId);
         if (apiKey == null) {
             return false;
         }
@@ -155,11 +155,11 @@ public class ApiKeyService {
      * List API keys for a tenant.
      */
     @Transactional
-    public List<ApiKey> listKeys(UUID tenantId, boolean activeOnly) {
+    public List<ApiKeyEntity> listKeys(UUID tenantId, boolean activeOnly) {
         if (activeOnly) {
-            return ApiKey.list("tenantId = ?1 AND active = true ORDER BY createdAt DESC", tenantId);
+            return ApiKeyEntity.list("tenantId = ?1 AND active = true ORDER BY createdAt DESC", tenantId);
         }
-        return ApiKey.list("tenantId = ?1 ORDER BY createdAt DESC", tenantId);
+        return ApiKeyEntity.list("tenantId = ?1 ORDER BY createdAt DESC", tenantId);
     }
 
     // ============================================

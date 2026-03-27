@@ -1,19 +1,21 @@
 package com.decisionmesh.contracts.security.service;
 
-
-import com.decisionmesh.contracts.security.entity.Organization;
-import com.decisionmesh.contracts.security.entity.User;
+import com.decisionmesh.contracts.security.entity.OrganizationEntity;
+import com.decisionmesh.contracts.security.entity.UserEntity;
 import com.decisionmesh.contracts.security.resource.dto.SignupRequest;
 import com.decisionmesh.contracts.security.resource.dto.SignupResponse;
 import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import org.jboss.logging.Logger;
 
 import java.util.UUID;
 
 @ApplicationScoped
 public class SignupService {
+
+    private static final Logger LOG = Logger.getLogger(SignupService.class);
 
     @Inject
     SecurityIdentity identity;
@@ -26,79 +28,56 @@ public class SignupService {
 
     @Inject
     ApiKeyService apiKeyService;
+
+    @Inject
+    UserOrganizationService userOrganizationService;
+
     @Inject
     KeycloakProvisioningService keycloakProvisioningService;
 
+    @Transactional
     public SignupResponse onboard(SignupRequest request) {
 
         String externalUserId = identity.getPrincipal().getName();
-        String email = identity.getAttribute("email");
+        String email          = identity.getAttribute("email");
+        String name           = identity.getAttribute("name");  //  from token
 
-        User existing = userService.findByExternalUserId(externalUserId);
-
+        //  Already onboarded — return existing
+        UserEntity existing = userService.findByExternalUserId(externalUserId);
         if (existing != null) {
             return buildExistingResponse(existing);
         }
 
-        UUID tenantId = tenantService.createTenant(request.organizationName,request.idempotencyKey);
-
-        User user = userService.createExternalUser(
-                externalUserId,
-                email,
-                tenantId
+        //  Create tenant
+        UUID tenantId = tenantService.createTenant(
+                request.organizationName,
+                request.idempotencyKey
         );
 
-        Organization org = tenantService.createDefaultOrganization(
+        //  Fix 1 — createExternalUser takes (externalId, email, name) all Strings
+        UserEntity user = userService.createExternalUser(
+                externalUserId,
+                email,
+                name            //  String not UUID
+        );
+
+        //  Create default org under tenant
+        OrganizationEntity org = tenantService.createDefaultOrganization(
                 tenantId,
                 request.organizationName
         );
 
-        ApiKeyService.ApiKeyResult apiKey =
-                apiKeyService.createApiKey(
-                        org.organizationId,
-                        tenantId,
-                        user.userId,
-                        "Default API Key",
-                        false,
-                        30
-                );
-
-        return new SignupResponse(
-                user.userId.toString(),
+        //  Fix 2 — use org.organizationId (match your OrganizationEntity field name)
+        userOrganizationService.createMembership(
+                user.userId,
+                org.id,
                 tenantId,
-                apiKey.key
-        );
-    }
-
-    @Transactional
-    public void autoOnboard(SecurityIdentity identity) {
-
-        String externalUserId = identity.getPrincipal().getName();
-        String email = identity.getAttribute("email");
-
-        // Prevent race condition
-        if (userService.findByExternalUserId(externalUserId) != null) {
-            return;
-        }
-
-        UUID tenantId = tenantService.createTenant(
-                "Default Organization",
-                externalUserId  // using sub as idempotency anchor
+                "OWNER"
         );
 
-        User user = userService.createExternalUser(
-                externalUserId,
-                email,
-                tenantId
-        );
-
-        var org = tenantService.createDefaultOrganization(
-                tenantId,
-                "Default Organization"
-        );
-
-        apiKeyService.createApiKey(
-                org.organizationId,
+        //  Create API key
+        ApiKeyService.ApiKeyResult apiKey = apiKeyService.createApiKey(
+                org.id,
                 tenantId,
                 user.userId,
                 "Default API Key",
@@ -106,17 +85,32 @@ public class SignupService {
                 30
         );
 
+        //  Assign Keycloak role
         keycloakProvisioningService.assignTenantAdminRole(
                 externalUserId,
                 tenantId
         );
-    }
 
-    private SignupResponse buildExistingResponse(User user) {
+        LOG.infof("Onboarded: user=%s tenant=%s", email, tenantId);
+
         return new SignupResponse(
                 user.userId.toString(),
-                user.tenantId,
-                null // or fetch existing key if needed
+                tenantId,           //  plain UUID not Optional
+                apiKey.key
+        );
+    }
+
+    private SignupResponse buildExistingResponse(UserEntity user) {
+        //  Fix 3 — unwrap Optional<UUID> with orElseThrow
+        UUID tenantId = userOrganizationService
+                .findTenantIdByUserId(user.userId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "User exists but has no tenant: " + user.userId));
+
+        return new SignupResponse(
+                user.userId.toString(),
+                tenantId,           //  plain UUID
+                null
         );
     }
 }

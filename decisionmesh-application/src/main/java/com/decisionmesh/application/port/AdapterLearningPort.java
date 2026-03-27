@@ -7,6 +7,6 @@ import java.util.Map;
 import java.util.UUID;
 
 public interface AdapterLearningPort {
-    Uni<Map<String, AdapterStats>> getStats(UUID intentId,
-                                            List<String> adapters);
+    Uni<Map<String, AdapterStats>> getStats(UUID intentId, List<String> adapters);
+    Uni<Map<String, AdapterStats>> getStatsForIntentType(UUID tenantId, String intentType);
 }

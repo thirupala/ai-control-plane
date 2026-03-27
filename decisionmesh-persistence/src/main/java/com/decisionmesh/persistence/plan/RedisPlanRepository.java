@@ -6,13 +6,16 @@ import io.quarkus.redis.datasource.ReactiveRedisDataSource;
 import io.quarkus.redis.datasource.sortedset.ReactiveSortedSetCommands;
 import io.quarkus.redis.datasource.value.ReactiveValueCommands;
 import io.smallrye.mutiny.Uni;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Alternative;
 import jakarta.inject.Inject;
 
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
-
+@Alternative
+@Priority(0)
 @ApplicationScoped
 public class RedisPlanRepository implements PlanRepositoryPort {
 

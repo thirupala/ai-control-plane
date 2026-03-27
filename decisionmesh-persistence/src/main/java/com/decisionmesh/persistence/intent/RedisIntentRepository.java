@@ -5,13 +5,17 @@ import com.decisionmesh.domain.intent.Intent;
 import io.quarkus.redis.datasource.ReactiveRedisDataSource;
 import io.quarkus.redis.datasource.value.ReactiveValueCommands;
 import io.smallrye.mutiny.Uni;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Alternative;
 import jakarta.inject.Inject;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.ws.rs.NotFoundException;
 
 import java.util.Objects;
 import java.util.UUID;
+
+import static io.quarkus.hibernate.orm.panache.Panache.getEntityManager;
 
 /**
  * Redis-backed Intent repository.
@@ -23,6 +27,8 @@ import java.util.UUID;
  *     <li>Aggregate stored as single JSON blob</li>
  * </ul>
  */
+@Alternative
+@Priority(0)
 @ApplicationScoped
 public class RedisIntentRepository implements IntentRepositoryPort {
 
@@ -43,14 +49,14 @@ public class RedisIntentRepository implements IntentRepositoryPort {
 
         String key = buildKey(intent);
 
-        return valueCommands.get(key)
+            return valueCommands.get(key)
                 .flatMap(existingJson -> {
 
                     if (existingJson != null) {
 
-                        Intent existing = Intent.fromJson(existingJson);
+                        Intent existingIntent = Intent.fromJson(existingJson);
 
-                        if (existing.getVersion() >= intent.getVersion()) {
+                        if (existingIntent.getVersion() >= intent.getVersion()) {
                             return Uni.createFrom().failure(
                                     new OptimisticLockException(
                                             "Version conflict for intent " + intent.getId()
@@ -84,7 +90,13 @@ public class RedisIntentRepository implements IntentRepositoryPort {
                 .map(Intent::fromJson);
     }
 
-
+    @Override
+    public Uni<Void> flush() {
+        return Uni.createFrom().item(() -> {
+            getEntityManager().flush();
+            return null;
+        });
+    }
 
 
     private String buildKey(Intent intent) {

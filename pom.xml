@@ -44,6 +44,9 @@
         <!-- Governance -->
         <module>decisionmesh-governance</module>
 
+
+        <module>decisionmesh-llm</module>
+
         <!-- Event Sourcing / CQRS -->
         <module>decisionmesh-cqrs</module>
 

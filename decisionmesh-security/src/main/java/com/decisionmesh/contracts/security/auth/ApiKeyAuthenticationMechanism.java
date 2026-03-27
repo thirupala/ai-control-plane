@@ -1,6 +1,6 @@
 package com.decisionmesh.contracts.security.auth;
 
-import com.decisionmesh.contracts.security.entity.ApiKey;
+import com.decisionmesh.contracts.security.entity.ApiKeyEntity;
 import com.decisionmesh.contracts.security.service.ApiKeyService;
 import io.quarkus.security.identity.IdentityProviderManager;
 import io.quarkus.security.identity.SecurityIdentity;
@@ -77,7 +77,7 @@ public class ApiKeyAuthenticationMechanism implements HttpAuthenticationMechanis
         //  Execute blocking database call on Vert.x blocking executor, convert Future to Uni
         return Uni.createFrom().completionStage(() ->
                 context.vertx().executeBlocking(() -> {
-                    ApiKey apiKey = apiKeyService.validateAndGetKey(credential);
+                    ApiKeyEntity apiKey = apiKeyService.validateAndGetKey(credential);
 
                     if (apiKey == null) {
                         LOG.warnf("❌ Invalid API key");
@@ -223,7 +223,7 @@ public class ApiKeyAuthenticationMechanism implements HttpAuthenticationMechanis
     /**
          * Custom principal for API key authentication.
          */
-        public record ApiKeyPrincipal(ApiKey apiKey) implements Principal {
+        public record ApiKeyPrincipal(ApiKeyEntity apiKey) implements Principal {
 
         @Override
             public String getName() {

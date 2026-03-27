@@ -8,4 +8,5 @@ import java.util.UUID;
 public interface IntentRepositoryPort {
     Uni<Intent> findById(UUID tenantId, UUID intentId);
     Uni<Void> save(Intent intent);
+    Uni<Void> flush();
 }

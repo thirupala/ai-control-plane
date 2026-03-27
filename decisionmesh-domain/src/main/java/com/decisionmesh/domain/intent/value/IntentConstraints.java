@@ -1,107 +1,103 @@
 package com.decisionmesh.domain.intent.value;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Collections;
-import java.util.Objects;
-import java.util.Set;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+import java.util.List;
 
 /**
- * @param maxCost            Economic constraints
- * @param maxLatency         Performance constraints
- * @param maxRiskScore       Risk constraints
- * @param maxRetries         Execution constraints
- * @param allowedRegions     Routing constraints
- * @param minConfidenceScore Quality constraints
- * @param maxDriftScore      Drift tolerance
+ * Execution constraints attached to an Intent.
+ *
+ * Referenced by:
+ *   PromptBuilder         — timeoutSeconds() for SLA urgency signal
+ *   IntentCentricPlanner  — allowedAdapters(), region(), maxTokens(), timeoutSeconds()
+ *   LlmModelSelector      — region() for adapter filtering
+ *   IntentCentricSLAGuard — maxExecutionWindow() for SLA enforcement
+ *   DriftEvaluator        — maxDriftThreshold() for drift violation detection
+ *   Intent.fromRequest()  — deserialized from REST request body via @JsonCreator
  */
-public record IntentConstraints(double maxCost, int maxTokens, Duration maxLatency, Instant deadline,
-                                double maxRiskScore, int maxRetries, boolean allowParallelExecution,
-                                Set<String> allowedRegions, Set<String> allowedAdapters, double minConfidenceScore,
-                                double maxDriftScore, double maxDriftThreshold, Duration maxExecutionWindow) {
+public record IntentConstraints(
+        int          maxRetries,          // max execution retry attempts
+        int          timeoutSeconds,      // SLA deadline in seconds (0 = no limit)
+        int          maxTokens,           // max LLM output tokens (0 = adapter default)
+        String       region,              // required data-residency region (null = any)
+        List<String> allowedAdapters,     // explicit adapter ID allowlist (empty = all)
+        List<String> requiredCompliance,  // compliance frameworks e.g. ["HIPAA", "SOC2"]
+        double       maxDriftThreshold,   // max acceptable drift score 0..1 (0 = no limit)
+        long         maxExecutionWindow,  // max wall-clock ms for entire intent (0 = no limit)
+        long         maxLatency           // max acceptable adapter latency in ms (0 = no limit)
+) {
 
-    public IntentConstraints(
-            double maxCost,
-            int maxTokens,
-            Duration maxLatency,
-            Instant deadline,
-            double maxRiskScore,
-            int maxRetries,
-            boolean allowParallelExecution,
-            Set<String> allowedRegions,
-            Set<String> allowedAdapters,
-            double minConfidenceScore,
-            double maxDriftScore,
-            double maxDriftThreshold,
-            Duration maxExecutionWindow
-    ) {
+    // ── Compact constructor ───────────────────────────────────────────────────
 
-        if (maxCost < 0) throw new IllegalArgumentException("maxCost must be >= 0");
-        if (maxTokens < 0) throw new IllegalArgumentException("maxTokens must be >= 0");
-        if (maxRiskScore < 0) throw new IllegalArgumentException("maxRiskScore must be >= 0");
-        if (maxRetries < 0) throw new IllegalArgumentException("maxRetries must be >= 0");
-        if (minConfidenceScore < 0) throw new IllegalArgumentException("minConfidenceScore must be >= 0");
-        if (maxDriftScore < 0) throw new IllegalArgumentException("maxDriftScore must be >= 0");
-        if (maxDriftThreshold < 0) throw new IllegalArgumentException("maxDriftThreshold must be >= 0");
-
-        this.maxCost = maxCost;
-        this.maxTokens = maxTokens;
-        this.maxLatency = maxLatency;
-        this.deadline = deadline;
-        this.maxRiskScore = maxRiskScore;
-        this.maxRetries = maxRetries;
-        this.allowParallelExecution = allowParallelExecution;
-
-        // Defensive copy
-        this.allowedRegions = allowedRegions == null
-                ? Collections.emptySet()
-                : Set.copyOf(allowedRegions);
-
-        this.allowedAdapters = allowedAdapters == null
-                ? Collections.emptySet()
-                : Set.copyOf(allowedAdapters);
-
-        this.minConfidenceScore = minConfidenceScore;
-        this.maxDriftScore = maxDriftScore;
-        this.maxDriftThreshold = maxDriftThreshold;
-        this.maxExecutionWindow = maxExecutionWindow;
+    public IntentConstraints {
+        allowedAdapters    = allowedAdapters    != null ? List.copyOf(allowedAdapters)    : List.of();
+        requiredCompliance = requiredCompliance != null ? List.copyOf(requiredCompliance) : List.of();
+        if (maxRetries < 0)           throw new IllegalArgumentException("maxRetries must be >= 0");
+        if (timeoutSeconds < 0)       throw new IllegalArgumentException("timeoutSeconds must be >= 0");
+        if (maxTokens < 0)            throw new IllegalArgumentException("maxTokens must be >= 0");
+        if (maxDriftThreshold < 0.0)  throw new IllegalArgumentException("maxDriftThreshold must be >= 0");
+        if (maxExecutionWindow < 0)   throw new IllegalArgumentException("maxExecutionWindow must be >= 0");
+        if (maxLatency < 0)           throw new IllegalArgumentException("maxLatency must be >= 0");
     }
 
-    // =====================================
-    // Factory (cleaned and safe)
-    // =====================================
+    // ── Jackson deserialization factory ──────────────────────────────────────
 
-    public static IntentConstraints of(
-            double maxCost,
-            Duration maxLatency,
-            double maxRiskScore,
-            int maxRetries,
-            Set<String> allowedRegions,
-            Set<String> allowedAdapters
-    ) {
-
-        Objects.requireNonNull(maxLatency, "maxLatency required");
-
-        Duration executionWindow = maxLatency.multipliedBy(3);
-
+    @JsonCreator
+    public static IntentConstraints fromJson(
+            @JsonProperty("maxRetries")          int          maxRetries,
+            @JsonProperty("timeoutSeconds")      int          timeoutSeconds,
+            @JsonProperty("maxTokens")           int          maxTokens,
+            @JsonProperty("region")              String       region,
+            @JsonProperty("allowedAdapters")     List<String> allowedAdapters,
+            @JsonProperty("requiredCompliance")  List<String> requiredCompliance,
+            @JsonProperty("maxDriftThreshold")   double       maxDriftThreshold,
+            @JsonProperty("maxExecutionWindow")  long         maxExecutionWindow,
+            @JsonProperty("maxLatency")          long         maxLatency) {
         return new IntentConstraints(
-                maxCost,
-                10000,                               // default maxTokens
-                maxLatency,
-                Instant.now().plus(maxLatency),      // auto deadline
-                maxRiskScore,
-                maxRetries,
-                false,                               // default parallel execution
-                allowedRegions,
-                allowedAdapters,
-                0.5,                                 // default confidence
-                1.0,                                 // default drift score
-                1.0,                                 // default drift threshold
-                executionWindow
+                maxRetries, timeoutSeconds, maxTokens, region,
+                allowedAdapters, requiredCompliance,
+                maxDriftThreshold, maxExecutionWindow, maxLatency
         );
     }
 
-    // =====================================
-    // Getters
-    // =====================================
+    // ── Convenience factories ─────────────────────────────────────────────────
+
+    /** Minimal — just retry and timeout, everything else defaulted. */
+    public static IntentConstraints of(int maxRetries, int timeoutSeconds) {
+        return new IntentConstraints(maxRetries, timeoutSeconds, 0,
+                null, List.of(), List.of(), 0.0, 0L, 0L);
+    }
+
+    /** No constraints — useful for tests. */
+    public static IntentConstraints none() {
+        return new IntentConstraints(3, 30, 0, null, List.of(), List.of(), 0.0, 0L, 0L);
+    }
+
+    // ── Semantic helpers ──────────────────────────────────────────────────────
+
+    /**
+     * True when this constraint has a drift limit configured.
+     * DriftEvaluator uses this to skip drift checks when no threshold is set.
+     */
+    public boolean hasDriftLimit() {
+        return maxDriftThreshold > 0.0;
+    }
+
+    /**
+     * True when a maximum execution window is configured.
+     * IntentCentricSLAGuard uses this for wall-clock enforcement.
+     */
+    public boolean hasExecutionWindow() {
+        return maxExecutionWindow > 0L;
+    }
+
+    /**
+     * True when a per-adapter latency cap is configured.
+     * LlmModelSelector uses this to filter out adapters whose EMA latency
+     * already exceeds the constraint.
+     */
+    public boolean hasLatencyLimit() {
+        return maxLatency > 0L;
+    }
 }

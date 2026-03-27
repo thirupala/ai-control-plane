@@ -11,12 +11,20 @@ services:
       POSTGRES_PASSWORD: decisionmesh
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - decisionmesh
 
   redis:
     image: redis:7.2-alpine
     container_name: decisionmesh-redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - decisionmesh
 
   kafka:
     image: redpandadata/redpanda:latest
@@ -32,7 +40,22 @@ services:
       - --check=false
     ports:
       - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/redpanda/data
+    networks:
+      - decisionmesh
 
+  keycloak-db:
+    image: postgres:15-alpine
+    container_name: decisionmesh-keycloak-db
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    networks:
+      - decisionmesh
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.5
@@ -41,10 +64,18 @@ services:
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
     ports:
       - "8180:8080"
     volumes:
       - ./infra/keycloak/decisionmesh-realm.json:/opt/keycloak/data/import/decisionmesh-realm.json
+    depends_on:
+      - keycloak-db
+    networks:
+      - decisionmesh
 
   prometheus:
     image: prom/prometheus:latest
@@ -53,12 +84,31 @@ services:
       - "9090:9090"
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-
+      - prometheus_data:/prometheus
+    networks:
+      - decisionmesh
 
   grafana:
     image: grafana/grafana:latest
+    container_name: decisionmesh-grafana
     ports:
       - "3001:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - decisionmesh
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  keycloak_db_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  decisionmesh:
+    driver: bridge

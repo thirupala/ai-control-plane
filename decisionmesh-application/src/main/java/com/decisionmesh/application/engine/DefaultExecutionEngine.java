@@ -6,8 +6,12 @@ import com.decisionmesh.domain.execution.FailureType;
 import com.decisionmesh.domain.plan.Plan;
 import com.decisionmesh.domain.value.PlanVersion;
 import io.smallrye.mutiny.Uni;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Alternative;
 
+@Alternative
+@Priority(0)
 @ApplicationScoped
 public class DefaultExecutionEngine implements ExecutionEngine {
 

@@ -2,10 +2,14 @@ package com.decisionmesh.telemetry;
 
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Alternative;
+import jakarta.persistence.PrimaryKeyJoinColumns;
 
 import java.util.UUID;
-
+@Alternative
+@Priority(0)
 @ApplicationScoped
 public class LoggingTelemetryPublisher {
 
