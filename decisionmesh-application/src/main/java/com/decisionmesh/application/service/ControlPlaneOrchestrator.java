@@ -20,7 +20,6 @@ import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.math.BigDecimal;
@@ -35,23 +34,20 @@ import java.util.UUID;
  *
  * Workflow:  PRE_SUBMISSION policy
  *            → budget validation
- *            → persist (CREATED)
- *            → PLANNING   [persist]
+ *            → persist (CREATED)      [+ drain events]
+ *            → PLANNING               [persist + drain events]
  *            → plan + persist plan
- *            → PLANNED    [persist]          ← was missing: caused Invalid transition
- *            → EXECUTING  [persist]
+ *            → PLANNED                [persist + drain events]
+ *            → EXECUTING              [persist + drain events]
  *            → execution with governance + retry
- *            → EVALUATING [in memory]
+ *            → EVALUATING             [persist + drain events]
  *            → POST_EXECUTION policy
- *            → SATISFIED | VIOLATED
- *            → persist final state
+ *            → SATISFIED | VIOLATED   [persist + drain events]
  */
 @ApplicationScoped
 public class ControlPlaneOrchestrator {
 
-    // -------------------------------------------------------------------------
-    // Dependencies
-    // -------------------------------------------------------------------------
+    // ─── Dependencies ────────────────────────────────────────────────────────
 
     @Inject Planner                    planner;
     @Inject ExecutionEngine            executionEngine;
@@ -69,74 +65,53 @@ public class ControlPlaneOrchestrator {
     @Inject ReconciliationService      reconciliationService;
     @Inject PlanRepositoryPort         planRepository;
 
-    // -------------------------------------------------------------------------
-    // Configuration
-    // -------------------------------------------------------------------------
+    // ─── Configuration ───────────────────────────────────────────────────────
 
-    @ConfigProperty(name = "controlplane.lock.intent-ttl-minutes", defaultValue = "5")
+    @ConfigProperty(name = "controlplane.lock.intent-ttl-minutes",    defaultValue = "5")
     int lockTtlMinutes;
 
-    @ConfigProperty(name = "controlplane.lock.max-retries", defaultValue = "5")
+    @ConfigProperty(name = "controlplane.lock.max-retries",           defaultValue = "5")
     int lockMaxRetries;
 
-    @ConfigProperty(name = "controlplane.lock.initial-backoff-ms", defaultValue = "100")
+    @ConfigProperty(name = "controlplane.lock.initial-backoff-ms",    defaultValue = "100")
     int lockInitialBackoffMs;
 
-    @ConfigProperty(name = "controlplane.lock.extend-threshold-ms", defaultValue = "60000")
+    @ConfigProperty(name = "controlplane.lock.extend-threshold-ms",   defaultValue = "60000")
     long lockExtendThresholdMs;
 
-    // -------------------------------------------------------------------------
-    // Public API
-    // -------------------------------------------------------------------------
+    // ─── Public API ──────────────────────────────────────────────────────────
 
     /**
      * Submit a new intent to the control plane.
-     * Pipeline: idempotency → rate limit → distributed lock → workflow
      *
-     * @param intent         Validated intent aggregate from API layer
-     * @param tenantId       Tenant context from authenticated identity
-     * @param idempotencyKey Caller-supplied deduplication key
-     * @param intentType     Intent type for rate limit scoping
-     * @return Intent UUID on acceptance
+     * Returns a Uni — callers must subscribe (or chain) for any work to execute.
+     * @Transactional removed: JTA transactions are thread-bound and incompatible
+     * with Mutiny's event-loop threading model.
      */
-    @Transactional
-    public UUID submit(Intent intent,
-                       UUID tenantId,
-                       String idempotencyKey,
-                       String intentType) {
+    public Uni<UUID> submit(Intent intent,
+                            UUID tenantId,
+                            String idempotencyKey,
+                            String intentType) {
 
         Log.infof("Intent submission: id=%s, tenant=%s, type=%s, idempotency=%s",
                 intent.getId(), tenantId, intentType, idempotencyKey);
 
-        // ✅ Idempotency (blocking)
-        boolean allowed = idempotencyService
-                .checkAndRegister(tenantId, idempotencyKey)
-                .await().indefinitely();
-
-        if (!allowed) {
-            throw new DuplicateSubmissionException("Duplicate request: " + idempotencyKey);
-        }
-
-        // ✅ Rate limit (blocking)
-        boolean rateLimitOk = rateLimiter
-                .enforce(tenantId, intentType)
-                .await().indefinitely();
-
-        if (!rateLimitOk) {
-            throw new RateLimitExceededException(
-                    "Rate limit exceeded for tenant: " + tenantId);
-        }
-
-        // ✅ Ensure ID
-        if (intent.getId() == null) {
-            intent.setId(UUID.randomUUID());
-        }
-
-        // ✅ Process workflow (blocking)
-        processIntentWithLock(intent, tenantId)
-                .await().indefinitely();
-
-        return intent.getId();
+        // Pipeline — all steps chained; nothing blocks the event loop
+        return idempotencyService.checkAndRegister(tenantId, idempotencyKey)
+                .invoke(allowed -> {
+                    if (!allowed) throw new DuplicateSubmissionException(
+                            "Duplicate request: " + idempotencyKey);
+                })
+                .flatMap(v -> rateLimiter.enforce(tenantId, intentType))
+                .invoke(ok -> {
+                    if (!ok) throw new RateLimitExceededException(
+                            "Rate limit exceeded for tenant: " + tenantId);
+                })
+                .flatMap(v -> {
+                    if (intent.getId() == null) intent.setId(UUID.randomUUID());
+                    return processIntentWithLock(intent, tenantId);
+                })
+                .replaceWith(intent.getId());
     }
 
     /**
@@ -147,19 +122,9 @@ public class ControlPlaneOrchestrator {
         return intentRepository.findById(tenantId, intentId);
     }
 
-    // -------------------------------------------------------------------------
-    // Lock coordination
-    // -------------------------------------------------------------------------
+    // ─── Lock coordination ───────────────────────────────────────────────────
 
-    /**
-     * Acquire a distributed lock for this intent partition,
-     * run the full workflow, then ALWAYS release — on success or failure.
-     *
-     * Partition key: "{tenantId}:{intentId}"
-     * Redis key:     "lock:intent:{tenantId}:{intentId}"  (prefix in RedisLockManager)
-     */
     private Uni<Void> processIntentWithLock(Intent intent, UUID tenantId) {
-        intent.setTenantId(tenantId);
 
         String partitionKey = buildPartitionKey(intent, tenantId);
 
@@ -190,70 +155,69 @@ public class ControlPlaneOrchestrator {
                                 intent.getId(), partitionKey));
     }
 
-    // -------------------------------------------------------------------------
-    // Workflow — full state machine
-    // -------------------------------------------------------------------------
+    // ─── Workflow — full state machine ───────────────────────────────────────
 
     /**
-     * Intent lifecycle:
+     * Each phase transition:
+     *   1. Mutate intent state (markX())
+     *   2. Persist intent
+     *   3. Drain and persist domain events immediately
      *
-     *   [CREATED]   → pre-submission policy + budget validation + initial persist
-     *   [PLANNING]  → persist → planner.plan() → persist plan
-     *   [PLANNED]   → persist                            ← Fix: was missing, caused Invalid transition
-     *   [EXECUTING] → persist → execution with governance/retry
-     *   [EVALUATING]→ in-memory only (no persist — phase advances within same transaction)
-     *   [COMPLETED] → SATISFIED or VIOLATED → persist final state
-     *
-     * Each phase is persisted before the work of that phase begins, so the DB
-     * always reflects the in-progress state — crash recovery and reconciliation
-     * can resume from the last persisted phase.
+     * pullDomainEvents() is destructive — calling it twice returns empty on the
+     * second call. Every transition drains the event queue right after it fires
+     * so no events are silently lost.
      */
-
     private Uni<Void> processIntentWorkflow(Intent intent, LockToken lockToken) {
 
         return policyEngine.evaluatePreSubmission(intent)
-                .emitOn(io.smallrye.mutiny.infrastructure.Infrastructure.getDefaultWorkerPool())
                 .invoke(this::assertPolicyAllowed)
 
                 // Budget validation
                 .flatMap(v -> budgetGuard.validateBudget(intent))
 
-                // 1. Persist intent FIRST
+                // ── CREATED ──────────────────────────────────────────────────
+                // intent.create() / constructor already set phase=CREATED and
+                // raised the CREATED event — persist intent then drain events.
                 .flatMap(v -> intentRepository.save(intent))
+                .flatMap(v -> drainEvents(intent))
 
-                // 2. Immediately persist CREATED event
+                // ── PLANNING ──────────────────────────────────────────────────
                 .flatMap(v -> {
-                    var events = intent.pullDomainEvents();
-                    return eventRepository.appendAll(events);
+                    intent.startPlanning();
+                    return intentRepository.save(intent);
                 })
-
-                // ── PLANNING phase ──────────────────────────────────────────
-                .invoke(v -> intent.startPlanning())
-                .flatMap(v -> intentRepository.save(intent))
+                .flatMap(v -> drainEvents(intent))
 
                 // Plan
                 .flatMap(v -> planner.plan(intent))
                 .flatMap(plan -> planRepository.save(plan).replaceWith(plan))
 
-                // ── PLANNED phase ───────────────────────────────────────────
+                // ── PLANNED ───────────────────────────────────────────────────
                 .flatMap(plan -> {
                     intent.markPlanned();
                     return intentRepository.save(intent)
+                            .flatMap(v -> drainEvents(intent))
                             .replaceWith(plan);
                 })
 
-                // ── EXECUTING phase ─────────────────────────────────────────
+                // ── EXECUTING ─────────────────────────────────────────────────
                 .flatMap(plan -> {
                     intent.markExecuting();
                     return intentRepository.save(intent)
+                            .flatMap(v -> drainEvents(intent))
                             .replaceWith(plan);
                 })
 
                 // Execute
                 .flatMap(plan -> executeWithGovernanceAndRetry(intent, plan, lockToken, 1))
 
-                // ── EVALUATING ──────────────────────────────────────────────
-                .invoke(record -> intent.markEvaluating())
+                // ── EVALUATING ────────────────────────────────────────────────
+                .flatMap(record -> {
+                    intent.markEvaluating();
+                    return intentRepository.save(intent)
+                            .flatMap(v -> drainEvents(intent))
+                            .replaceWith(record);
+                })
 
                 // Post-execution policy
                 .flatMap(record ->
@@ -261,30 +225,15 @@ public class ControlPlaneOrchestrator {
                                 .invoke(this::assertPolicyAllowed)
                                 .replaceWith(record))
 
-                // ── COMPLETED ───────────────────────────────────────────────
+                // ── SATISFIED | VIOLATED ──────────────────────────────────────
                 .flatMap(record -> finalizeIntent(intent, record))
 
-                // Persist final state (NO event append here)
+                // Persist final state + remaining events
                 .flatMap(v -> persistFinalState(intent));
     }
 
+    // ─── Execution with governance, SLA, and retry ───────────────────────────
 
-
-
-    // -------------------------------------------------------------------------
-    // Execution with governance, SLA, and retry
-    // -------------------------------------------------------------------------
-
-    /**
-     * Runs one execution attempt with full governance wrapper:
-     *   - Lock health check (extend TTL if low)
-     *   - SLA pre-validation
-     *   - Pre-execution policy gate
-     *   - Adapter dispatch
-     *   - Execution record persistence
-     *   - SLA post-validation
-     *   - Retry on failure (up to max_retries)
-     */
     private Uni<ExecutionRecord> executeWithGovernanceAndRetry(
             Intent intent,
             Plan plan,
@@ -316,13 +265,10 @@ public class ControlPlaneOrchestrator {
     }
 
     /**
-     * Handle a failed execution attempt.
-     *
-     * If retries remain: scheduleRetry() → persist → recurse with attemptNumber+1
-     * If exhausted:      markViolated()  → persist → propagate failure
-     *
-     * Note: markViolated() accepts both EXECUTING and EVALUATING phases
-     * (retries exhausted mid-execution vs. policy block after evaluation).
+     * Retry logic:
+     *   - Retries remain: scheduleRetry() + resumeExecution() atomically → single
+     *     save → recurse. Two saves per retry was redundant.
+     *   - Exhausted: markViolated() → save → propagate failure.
      */
     private Uni<ExecutionRecord> handleExecutionFailure(
             Intent intent,
@@ -338,28 +284,23 @@ public class ControlPlaneOrchestrator {
                     attemptNumber, intent.getMaxRetries(), intent.getId());
             intent.markViolated();
             return intentRepository.save(intent)
+                    .flatMap(v -> drainEvents(intent))
                     .flatMap(v -> Uni.createFrom().failure(ex));
         }
 
+        // Transition atomically before a single save — avoids the double-save
+        // pattern where resumeExecution() was called after the first persist.
         intent.scheduleRetry();
+        intent.resumeExecution();
 
         return intentRepository.save(intent)
-                .flatMap(v -> {
-                    intent.resumeExecution();   //   FIX
-                    return intentRepository.save(intent);
-                })
+                .flatMap(v -> drainEvents(intent))
                 .flatMap(v -> executeWithGovernanceAndRetry(
                         intent, plan, lockToken, attemptNumber + 1));
     }
 
-    // -------------------------------------------------------------------------
-    // Lock lifecycle helpers
-    // -------------------------------------------------------------------------
+    // ─── Lock lifecycle ───────────────────────────────────────────────────────
 
-    /**
-     * Extend lock TTL if remaining time is below the configured threshold.
-     * Prevents expiry during long multi-step executions (e.g., slow LLM responses).
-     */
     private Uni<Void> extendLockIfNeeded(LockToken lockToken) {
         long remainingMs = lockToken.remainingMillis();
 
@@ -382,10 +323,6 @@ public class ControlPlaneOrchestrator {
                 });
     }
 
-    /**
-     * Release lock safely — never throws, logs on failure.
-     * Called from onTermination() so it fires on success, failure, and cancellation.
-     */
     private Uni<Void> releaseLockSafely(LockToken lockToken) {
         return lockManager.release(lockToken)
                 .invoke(released -> {
@@ -405,26 +342,25 @@ public class ControlPlaneOrchestrator {
                 .replaceWithVoid();
     }
 
-    // -------------------------------------------------------------------------
-    // Finalization
-    // -------------------------------------------------------------------------
+    // ─── Finalization ─────────────────────────────────────────────────────────
 
     /**
-     * Transition intent to SATISFIED or VIOLATED based on the execution outcome.
+     * Transition to SATISFIED or VIOLATED.
+     * intent.phase must be EVALUATING when this is called.
      *
-     * At this point intent.phase == EVALUATING (set by markEvaluating() in workflow).
-     * markSatisfied() and markViolated() both transition from EVALUATING → COMPLETED.
+     * computeDriftScore() is not yet implemented — logs a warning so the
+     * placeholder is visible in production rather than silently writing 0.0.
      */
-    protected Uni<Void> finalizeIntent(Intent intent, ExecutionRecord executionRecord) {
+    private Uni<Void> finalizeIntent(Intent intent, ExecutionRecord executionRecord) {
         if (executionRecord.isSuccess()) {
             BigDecimal driftScore = computeDriftScore(intent, executionRecord);
             intent.updateDriftScore(driftScore, executionRecord.getExecutionId());
-            intent.markSatisfied();                               // EVALUATING → COMPLETED (SATISFIED)
+            intent.markSatisfied();
             Log.infof("Intent SATISFIED: id=%s, cost=$%.6f, drift=%.4f, attempts=%d",
                     intent.getId(), executionRecord.getCost(), driftScore,
                     executionRecord.getAttemptNumber());
         } else {
-            intent.markViolated();                                // EVALUATING → COMPLETED (VIOLATED)
+            intent.markViolated();
             Log.warnf("Intent VIOLATED: id=%s, reason=%s",
                     intent.getId(), executionRecord.getFailureReason());
         }
@@ -432,22 +368,32 @@ public class ControlPlaneOrchestrator {
     }
 
     /**
-     * Persist all terminal state: intent + domain events + learning profiles + telemetry.
-     * Steps are sequential — failure in any step propagates upward.
+     * Persist terminal state: intent + remaining domain events + learning + telemetry.
+     * Domain events at this point are only the final SATISFIED/VIOLATED event —
+     * all intermediate events were drained inline during workflow execution.
      */
     private Uni<Void> persistFinalState(Intent intent) {
-        List<DomainEvent> events = intent.pullDomainEvents();
-
         return intentRepository.save(intent)
-                .flatMap(v -> eventRepository.appendAll(events))
+                .flatMap(v -> drainEvents(intent))
                 .flatMap(v -> learningEngine.updateProfiles(intent.getId()))
                 .flatMap(v -> publishTelemetry(intent))
                 .replaceWithVoid();
     }
 
-    // -------------------------------------------------------------------------
-    // Utilities
-    // -------------------------------------------------------------------------
+    // ─── Utilities ────────────────────────────────────────────────────────────
+
+    /**
+     * Drain all pending domain events from the intent and persist them.
+     * pullDomainEvents() is destructive — call exactly once per transition.
+     * Returns voidItem immediately if there are no events to persist.
+     */
+    private Uni<Void> drainEvents(Intent intent) {
+        List<DomainEvent> events = intent.pullDomainEvents();
+        if (events.isEmpty()) {
+            return Uni.createFrom().voidItem();
+        }
+        return eventRepository.appendAll(events);
+    }
 
     private String buildPartitionKey(Intent intent, UUID tenantId) {
         return String.format("%s:%s", tenantId, intent.getId());
@@ -467,10 +413,13 @@ public class ControlPlaneOrchestrator {
     }
 
     /**
-     * Compute drift score for the executed intent.
-     * TODO: Delegate to DriftEvaluatorService (comparison of objective vs. output).
+     * TODO: Delegate to DriftEvaluatorService.
+     * Returns BigDecimal.ZERO until implemented — logged as a warning so
+     * the placeholder doesn't silently corrupt drift history.
      */
     private BigDecimal computeDriftScore(Intent intent, ExecutionRecord executionRecord) {
+        Log.warnf("computeDriftScore not implemented — writing 0.0 for intent=%s",
+                intent.getId());
         return BigDecimal.ZERO;
     }
 

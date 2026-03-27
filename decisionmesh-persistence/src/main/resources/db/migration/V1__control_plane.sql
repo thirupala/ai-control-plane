@@ -135,20 +135,33 @@ EXECUTE FUNCTION fn_set_updated_at();
 -- INTENTS
 -- ============================================================
 
+-- Drop the incomplete table
+DROP TABLE IF EXISTS intents;
+
 CREATE TABLE intents
 (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID REFERENCES tenants (id),
-    user_id         UUID REFERENCES users (user_id),
-    idempotency_key VARCHAR(255),
-    intent_type     VARCHAR(100),
-    phase           VARCHAR(50),
-    objective       JSONB,
-    version         INT              DEFAULT 0,
-    created_at      TIMESTAMPTZ      DEFAULT now(),
-
-    CONSTRAINT uq_intent_idem UNIQUE (tenant_id, idempotency_key)
+    id                 UUID         PRIMARY KEY,
+    tenant_id          UUID         NOT NULL,
+    user_id            UUID,
+    intent_type        VARCHAR(255) NOT NULL,
+    phase              VARCHAR(50)  NOT NULL,
+    satisfaction_state VARCHAR(50)  NOT NULL DEFAULT 'UNKNOWN',
+    retry_count        INTEGER      NOT NULL DEFAULT 0,
+    max_retries        INTEGER      NOT NULL DEFAULT 0,
+    terminal           BOOLEAN      NOT NULL DEFAULT false,
+    version            BIGINT       NOT NULL DEFAULT 0,
+    payload            JSONB        NOT NULL,
+    created_at         TIMESTAMPTZ  NOT NULL,
+    updated_at         TIMESTAMPTZ  NOT NULL
 );
+
+CREATE INDEX idx_intents_tenant
+    ON intents (tenant_id, created_at DESC);
+CREATE INDEX idx_intents_tenant_phase
+    ON intents (tenant_id, phase, created_at DESC);
+CREATE INDEX idx_intents_terminal
+    ON intents (tenant_id, terminal)
+    WHERE terminal = false;
 
 -- ============================================================
 -- PLANS
