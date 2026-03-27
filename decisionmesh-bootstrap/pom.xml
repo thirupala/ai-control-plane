@@ -1,103 +1,128 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
-
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-
     <parent>
         <groupId>com.decisionmesh</groupId>
         <artifactId>decisionmesh</artifactId>
         <version>1.0.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
-
     <artifactId>decisionmesh-bootstrap</artifactId>
     <packaging>jar</packaging>
+    <!--
+            Quarkus runtime entry point — wires all modules together.
 
+            Datasource strategy (dual datasource):
+            ┌─────────────────────────────────────────────────────────┐
+            │  quarkus.datasource.reactive.*   → Hibernate Reactive   │
+            │  quarkus.datasource.jdbc.*       → Flyway ONLY          │
+            │                                                         │
+            │  quarkus.hibernate-orm.enabled = false                  │
+            │  quarkus.flyway.migrate-at-start = true                 │
+            └─────────────────────────────────────────────────────────┘
 
+            See src/main/resources/application.properties for full config.
+
+            Changed from original:
+            ✗ quarkus-hibernate-orm    → replaced by quarkus-hibernate-reactive-panache
+            ✓ quarkus-jdbc-postgresql  → KEPT but for Flyway JDBC datasource only
+            ✓ quarkus-flyway           → KEPT (runs migrations at startup via JDBC)
+            ✓ quarkus-reactive-pg-client → NEW (application query path)
+         -->
     <dependencies>
-
-        <!-- Internal Modules -->
+        <!--  ── Internal modules ────────────────────────────────────────────  -->
         <dependency>
             <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-domain</artifactId>
         </dependency>
         <dependency>
             <groupId>com.decisionmesh</groupId>
-            <artifactId>decisionmesh-llm</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-application</artifactId>
         </dependency>
-
         <dependency>
             <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-persistence</artifactId>
         </dependency>
-
-        <!-- Quarkus Core -->
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-llm</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-streaming</artifactId>
+        </dependency>
+        <!--  ── Quarkus Core ────────────────────────────────────────────────  -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
         </dependency>
-
-        <!-- REST -->
+        <!--  ── Reactive ORM — application query path ───────────────────────  -->
+        <!--  Pulls in Hibernate Reactive automatically.
+                     MUST NOT coexist with quarkus-hibernate-orm in the same app.  -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-rest-jackson</artifactId>
+            <artifactId>quarkus-hibernate-reactive-panache</artifactId>
         </dependency>
-
-        <!-- Health -->
+        <!--  Reactive PostgreSQL driver — Vert.x PgClient  -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-smallrye-health</artifactId>
+            <artifactId>quarkus-reactive-pg-client</artifactId>
         </dependency>
-
-        <!-- Metrics -->
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
-        </dependency>
-
-        <!-- OpenTelemetry -->
-       <!-- <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-opentelemetry</artifactId>
-        </dependency>-->
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-vertx-http</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-hibernate-orm</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-jdbc-postgresql</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.eclipse.microprofile.jwt</groupId>
-            <artifactId>microprofile-jwt-auth-api</artifactId>
-        </dependency>
+        <!--  ── Schema migrations — JDBC path (Flyway only) ────────────────  -->
+        <!--  Flyway is JDBC-only internally. Keep both of these for migrations.
+                     They are NOT used by the application for queries —
+                     only the reactive driver is used at runtime.  -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-flyway</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jdbc-postgresql</artifactId>
+        </dependency>
+        <!--  ── REST ────────────────────────────────────────────────────────  -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest-jackson</artifactId>
+        </dependency>
+        <!--  ── Messaging ───────────────────────────────────────────────────  -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-messaging-kafka</artifactId>
+        </dependency>
+        <!--  ── Observability ───────────────────────────────────────────────  -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-health</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!--  ── Auth ────────────────────────────────────────────────────────  -->
+        <dependency>
+            <groupId>org.eclipse.microprofile.jwt</groupId>
+            <artifactId>microprofile-jwt-auth-api</artifactId>
+        </dependency>
+        <!--  ── Vert.x HTTP (reactive server) ──────────────────────────────  -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-vertx-http</artifactId>
+        </dependency>
+        <!--  ── Context propagation ─────────────────────────────────────────  -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-context-propagation</artifactId>
+        </dependency>
     </dependencies>
-
     <build>
         <plugins>
             <plugin>
                 <groupId>io.quarkus</groupId>
                 <artifactId>quarkus-maven-plugin</artifactId>
-                <version>3.31.1</version>
                 <extensions>true</extensions>
                 <executions>
                     <execution>
@@ -111,5 +136,4 @@
             </plugin>
         </plugins>
     </build>
-
 </project>

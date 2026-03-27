@@ -1,25 +1,32 @@
 package com.decisionmesh.persistence.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import com.decisionmesh.persistence.converter.MapListJsonConverter;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.UuidGenerator;
 import org.hibernate.type.SqlTypes;
 
-import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 @Entity
-@Table(name = "intent_plans", indexes = {
-        @Index(name = "idx_plans_intent", columnList = "intent_id"),
-        @Index(name = "idx_plans_tenant", columnList = "tenant_id")
-})
+@Table(
+        name = "intent_plans",
+        indexes = {
+                @Index(name = "idx_plans_intent", columnList = "intent_id"),
+                @Index(name = "idx_plans_tenant", columnList = "tenant_id")
+        }
+)
 public class IntentPlanEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @UuidGenerator
     @Column(name = "id", updatable = false, nullable = false)
     public UUID id;
 
@@ -33,15 +40,25 @@ public class IntentPlanEntity extends PanacheEntityBase {
     public int planVersion = 1;
 
     @Column(name = "strategy", nullable = false, length = 50)
-    public String strategy = "SINGLE_ADAPTER";  // SINGLE_ADAPTER, RANKED_FALLBACK, PARALLEL_RACE, ENSEMBLE
+    public String strategy = "SINGLE_ADAPTER";
 
     @Column(name = "status", nullable = false, length = 50)
-    public String status = "ACTIVE";            // ACTIVE, SUPERSEDED, ABANDONED
+    public String status = "ACTIVE";
 
-    @JdbcTypeCode(SqlTypes.JSON)
+    /**
+     * Ranking snapshot stored as JSONB array of objects.
+     * Uses AttributeConverter instead of @JdbcTypeCode(SqlTypes.JSON) because
+     * Hibernate Reactive's ReactiveJsonJdbcType uses Vert.x JsonObject which
+     * cannot bind JSON arrays — throws DecodeException on any List field.
+     */
+    @Convert(converter = MapListJsonConverter.class)
     @Column(name = "ranking_snapshot", nullable = false, columnDefinition = "jsonb")
-    public List<Map<String, Object>> rankingSnapshot;
+    public List<Map<String, Object>> rankingSnapshot = new ArrayList<>();
 
+    /**
+     * Budget allocation stored as JSONB object — Map<String, Object> is safe
+     * with @JdbcTypeCode(SqlTypes.JSON) since it serializes to {} not [].
+     */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "budget_allocation", nullable = false, columnDefinition = "jsonb")
     public Map<String, Object> budgetAllocation;
@@ -52,21 +69,22 @@ public class IntentPlanEntity extends PanacheEntityBase {
     @Column(name = "planner_notes", columnDefinition = "TEXT")
     public String plannerNotes;
 
+    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    public Instant createdAt = Instant.now();
+    public OffsetDateTime createdAt;
 
-    // ── Finders ───────────────────────────────────────────────────────
+    // ── Reactive finders ──────────────────────────────────────────────────────
 
-    public static Optional<IntentPlanEntity> findActiveByIntent(UUID intentId) {
-        return find("intentId = ?1 AND status = 'ACTIVE' ORDER BY planVersion DESC",
-                intentId).firstResultOptional();
+    public static Uni<IntentPlanEntity> findActiveByIntent(UUID intentId) {
+        return find("intentId = ?1 and status = 'ACTIVE' order by planVersion desc", intentId)
+                .firstResult();
     }
 
-    public static List<IntentPlanEntity> findAllByIntent(UUID intentId) {
-        return list("intentId = ?1 ORDER BY planVersion ASC", intentId);
+    public static Uni<List<IntentPlanEntity>> findAllByIntent(UUID intentId) {
+        return find("intentId = ?1 order by planVersion asc", intentId).list();
     }
 
-    public static Optional<IntentPlanEntity> findLatestByIntent(UUID intentId) {
-        return find("intentId = ?1 ORDER BY planVersion DESC", intentId).firstResultOptional();
+    public static Uni<IntentPlanEntity> findLatestByIntent(UUID intentId) {
+        return find("intentId = ?1 order by planVersion desc", intentId).firstResult();
     }
 }

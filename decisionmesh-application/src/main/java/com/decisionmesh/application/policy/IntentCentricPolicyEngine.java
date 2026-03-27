@@ -74,7 +74,7 @@ public class IntentCentricPolicyEngine implements PolicyEngine {
 
             // Cost drift policy
             if (record.isSuccess()) {
-                BigDecimal cost = record.getCostUsd();
+                BigDecimal cost = record.getCost();
                 BigDecimal budgetRemaining = BigDecimal.valueOf(intent.getBudget().remaining());
 
                 if (cost.compareTo(budgetRemaining) > 0) {

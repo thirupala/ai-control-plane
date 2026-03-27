@@ -91,7 +91,7 @@ public class RedisLearningEngine implements LearningEngine {
                             current,
                             record.isSuccess(),
                             record.getLatencyMs(),
-                            record.getCost()      // double primitive — correct field
+                            record.getCost().doubleValue()      // double primitive — correct field
                     );
 
                     return valueCommands.setex(

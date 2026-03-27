@@ -2,18 +2,19 @@ package com.decisionmesh.infrastructure.llm;
 
 import com.decisionmesh.domain.execution.ExecutionRecord;
 import com.decisionmesh.domain.intent.Intent;
-import com.decisionmesh.domain.intent.value.IntentObjective;
 import com.decisionmesh.domain.intent.value.IntentConstraints;
+import com.decisionmesh.domain.intent.value.IntentObjective;
 import com.decisionmesh.domain.intent.value.ObjectiveType;
-import com.decisionmesh.domain.value.Budget;
 import com.decisionmesh.domain.plan.PlanStep;
+import com.decisionmesh.domain.value.Budget;
 import com.decisionmesh.infrastructure.llm.openai.OpenAILlmAdapter;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import io.quarkus.test.junit.QuarkusTest;
-import io.vertx.core.json.JsonObject;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
 
+import java.math.BigDecimal;
+import java.util.Map;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -23,7 +24,6 @@ import static org.assertj.core.api.Assertions.*;
 @QuarkusTest
 class OpenAILlmAdapterTest {
 
-    // Injected by CDI — @ConfigProperty fields are populated correctly
     @Inject
     OpenAILlmAdapter adapter;
 
@@ -71,7 +71,7 @@ class OpenAILlmAdapterTest {
                 .await().indefinitely();
 
         assertThat(record.isSuccess()).isTrue();
-        assertThat(record.getCost()).isGreaterThan(0.0);
+        assertThat(record.getCost()).isGreaterThan(BigDecimal.valueOf(0.0));
         assertThat(record.getLatencyMs()).isGreaterThanOrEqualTo(0L);
         assertThat(record.getAttemptNumber()).isEqualTo(1);
     }
@@ -116,12 +116,14 @@ class OpenAILlmAdapterTest {
     }
 
     private PlanStep buildStep(String model, String endpoint) {
-        JsonObject config = new JsonObject()
-                .put("provider",   "OPENAI")
-                .put("model",      model)
-                .put("endpoint",   endpoint)   // WireMock URL overrides DEFAULT_ENDPOINT
-                .put("max_tokens", 100)
-                .put("timeout_ms", 5000L);
+        // configSnapshot is Map<String, Object> — no Vert.x JsonObject
+        Map<String, Object> config = Map.of(
+                "provider",   "OPENAI",
+                "model",      model,
+                "endpoint",   endpoint,   // WireMock URL overrides DEFAULT_ENDPOINT
+                "max_tokens", 100,
+                "timeout_ms", 5000L
+        );
 
         return PlanStep.builder()
                 .stepId(UUID.randomUUID())

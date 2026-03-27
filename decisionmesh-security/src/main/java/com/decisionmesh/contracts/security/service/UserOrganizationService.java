@@ -1,13 +1,14 @@
 package com.decisionmesh.contracts.security.service;
 
 import com.decisionmesh.contracts.security.entity.UserOrganizationEntity;
+import com.decisionmesh.contracts.security.repository.UserOrganizationRepository;
+import io.quarkus.hibernate.reactive.panache.Panache;
+import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.transaction.Transactional;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 @ApplicationScoped
@@ -15,85 +16,85 @@ public class UserOrganizationService {
 
     private static final Logger LOG = Logger.getLogger(UserOrganizationService.class);
 
-    @Transactional
-    public UserOrganizationEntity createMembership(
-            UUID userId,
-            UUID orgId,
-            UUID tenantId,
-            String role) {
+    @Inject
+    UserOrganizationRepository repository;
 
+    /**
+     * Creates a membership with no permissions — delegates to the full overload.
+     */
+    public Uni<UserOrganizationEntity> createMembership(
+            UUID userId, UUID orgId, UUID tenantId, String role) {
         return createMembership(userId, orgId, tenantId, role, List.of());
     }
 
-    @Transactional
-    public UserOrganizationEntity createMembership(
-            UUID userId,
-            UUID orgId,
-            UUID tenantId,
-            String role,
-            List<String> permissions) {           //  JSONB permissions as List
+    /**
+     * Creates a membership, guarding against duplicates.
+     * If the membership already exists, returns the existing record without error.
+     */
+    public Uni<UserOrganizationEntity> createMembership(
+            UUID userId, UUID orgId, UUID tenantId, String role,
+            List<String> permissions) {
 
-        //  Guard against duplicate membership
-        boolean exists = UserOrganizationEntity
-                .count("userId = ?1 and organizationId = ?2", userId, orgId) > 0;
+        return Panache.withTransaction(() ->
+                repository.countByUserAndOrg(userId, orgId)
+                        .flatMap(count -> {
+                            if (count > 0) {
+                                LOG.warnf("Membership already exists: userId=%s orgId=%s",
+                                        userId, orgId);
+                                return repository.findByUserAndOrg(userId, orgId);
+                            }
 
-        if (exists) {
-            LOG.warnf("Membership already exists: userId=%s orgId=%s", userId, orgId);
-            return UserOrganizationEntity
-                    .find("userId = ?1 and organizationId = ?2", userId, orgId)
-                    .<UserOrganizationEntity>firstResult();
-        }
+                            UserOrganizationEntity membership = new UserOrganizationEntity();
+                            membership.userId         = userId;
+                            membership.organizationId = orgId;
+                            membership.tenantId       = tenantId;
+                            membership.role           = role;
+                            membership.permissions    = permissions;
+                            membership.isActive       = true;
 
-        UserOrganizationEntity membership = new UserOrganizationEntity();
-        membership.userId         = userId;
-        membership.organizationId = orgId;
-        membership.tenantId       = tenantId;
-        membership.role           = role;
-        membership.permissions    = "[]";
-        membership.isActive       = true;
-        membership.createdAt      = Instant.now();
-        membership.updatedAt      = Instant.now();
-        membership.persist();
-
-        LOG.infof("Created membership: userId=%s orgId=%s tenantId=%s role=%s",
-                userId, orgId, tenantId, role);
-
-        return membership;
+                            return repository.persist(membership)
+                                    .invoke(m -> LOG.infof(
+                                            "Created membership: userId=%s orgId=%s tenantId=%s role=%s",
+                                            userId, orgId, tenantId, role));
+                        })
+        );
     }
 
-    //  Safe — returns Optional to avoid NPE
-    public Optional<UUID> findTenantIdByUserId(UUID userId) {
-        return UserOrganizationEntity
-                .find("userId = ?1 and isActive = true", userId)
-                .<UserOrganizationEntity>firstResultOptional()
-                .map(m -> m.tenantId);
+    /**
+     * Returns the tenantId for the first active membership of a user.
+     * Returns null inside the Uni if no active membership is found.
+     */
+    public Uni<UUID> findTenantIdByUserId(UUID userId) {
+        return Panache.withSession(() ->
+                repository.findFirstActiveByUser(userId)
+                        .map(m -> m != null ? m.tenantId : null)
+        );
     }
 
-    //  Find all active memberships for a user
-    public List<UserOrganizationEntity> findAllByUserId(UUID userId) {
-        return UserOrganizationEntity
-                .find("userId = ?1 and isActive = true", userId)
-                .list();
+    public Uni<List<UserOrganizationEntity>> findAllByUserId(UUID userId) {
+        return Panache.withSession(() ->
+                repository.findAllActiveByUser(userId)
+        );
     }
 
-    //  Find membership for specific tenant
-    public Optional<UserOrganizationEntity> findByUserAndTenant(UUID userId, UUID tenantId) {
-        return UserOrganizationEntity
-                .find("userId = ?1 and tenantId = ?2 and isActive = true",
-                        userId, tenantId)
-                .<UserOrganizationEntity>firstResultOptional();
+    public Uni<UserOrganizationEntity> findByUserAndTenant(UUID userId, UUID tenantId) {
+        return Panache.withSession(() ->
+                repository.findActiveByUserAndTenant(userId, tenantId)
+        );
     }
 
-    //  Deactivate membership (soft delete)
-    @Transactional
-    public void deactivateMembership(UUID userId, UUID orgId) {
-        UserOrganizationEntity membership = UserOrganizationEntity
-                .find("userId = ?1 and organizationId = ?2", userId, orgId)
-                .<UserOrganizationEntity>firstResult();
-
-        if (membership != null) {
-            membership.isActive  = false;
-            membership.updatedAt = Instant.now();
-        }
+    public Uni<Void> deactivateMembership(UUID userId, UUID orgId) {
+        return Panache.withTransaction(() ->
+                repository.findByUserAndOrg(userId, orgId)
+                        .flatMap(membership -> {
+                            if (membership == null) {
+                                LOG.warnf("Membership not found: userId=%s orgId=%s",
+                                        userId, orgId);
+                                return Uni.createFrom().voidItem();
+                            }
+                            membership.isActive = false;
+                            return repository.persist(membership).replaceWithVoid();
+                        })
+        );
     }
 }

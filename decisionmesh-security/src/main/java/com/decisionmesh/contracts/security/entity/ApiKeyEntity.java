@@ -1,24 +1,30 @@
 package com.decisionmesh.contracts.security.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import com.decisionmesh.contracts.security.converter.StringListJsonConverter;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UuidGenerator;
 
-import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * API Key entity for authentication.
- * Stores hashed keys (never plaintext) with metadata for multi-tenant access control.
- */
 @Entity
-@Table(name = "api_keys")
+@Table(
+        name = "api_keys",
+        indexes = {
+                @Index(name = "idx_api_keys_tenant",   columnList = "tenant_id"),
+                @Index(name = "idx_api_keys_key_hash", columnList = "key_hash")
+        }
+)
 public class ApiKeyEntity extends PanacheEntityBase {
 
     @Id
-    @Column(name = "key_id")
+    @UuidGenerator
+    @Column(name = "key_id", updatable = false, nullable = false)
     public UUID keyId;
 
     @Column(name = "organization_id", nullable = false)
@@ -27,7 +33,7 @@ public class ApiKeyEntity extends PanacheEntityBase {
     @Column(name = "created_by_userId", nullable = false)
     public UUID createdByUserId;
 
-    @Column(name = "key_hash", nullable = false, unique = true)
+    @Column(name = "key_hash", nullable = false, unique = true, length = 255)
     public String keyHash;
 
     @Column(name = "key_prefix", nullable = false, length = 20)
@@ -36,111 +42,92 @@ public class ApiKeyEntity extends PanacheEntityBase {
     @Column(name = "tenant_id", nullable = false)
     public UUID tenantId;
 
-    @Column(name = "name")
+    @Column(name = "name", length = 255)
     public String name;
 
-    @Column(name = "scopes")
-    @JdbcTypeCode(SqlTypes.JSON)
-    public String scopes; // JSON array of scopes
+    /**
+     * Scopes as JSONB string array — e.g. ["read", "write"].
+     * Uses AttributeConverter — see StringListJsonConverter for why.
+     */
+    @Convert(converter = StringListJsonConverter.class)
+    @Column(name = "scopes", columnDefinition = "jsonb")
+    public List<String> scopes = new ArrayList<>();
 
     @Column(name = "active", nullable = false)
     public Boolean active = true;
 
     @Column(name = "revoked_at")
-    public Instant revokedAt;
+    public OffsetDateTime revokedAt;
 
-    @Column(name = "revoked_by")
+    @Column(name = "revoked_by", length = 255)
     public String revokedBy;
 
     @Column(name = "last_used_at")
-    public Instant lastUsedAt;
+    public OffsetDateTime lastUsedAt;
 
     @Column(name = "usage_count", nullable = false)
     public Long usageCount = 0L;
 
-    @Column(name = "created_at", nullable = false)
-    public Instant createdAt;
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
+    public OffsetDateTime createdAt;
 
-    @Column(name = "created_by")
+    @Column(name = "created_by", length = 255)
     public String createdBy;
 
     @Column(name = "expires_at")
-    public Instant expiresAt;
+    public OffsetDateTime expiresAt;
 
-    @Column(name = "ip_whitelist")
-    @JdbcTypeCode(SqlTypes.JSON)
-    public String ipWhitelist;
+    /**
+     * IP whitelist as JSONB string array — e.g. ["192.168.1.0/24"].
+     * Uses AttributeConverter — see StringListJsonConverter for why.
+     */
+    @Convert(converter = StringListJsonConverter.class)
+    @Column(name = "ip_whitelist", columnDefinition = "jsonb")
+    public List<String> ipWhitelist = new ArrayList<>();
 
     @Column(name = "rate_limit")
     public Integer rateLimit;
 
-    // ============================================
-    // STATIC QUERIES
-    // ============================================
+    // ── Reactive finders ──────────────────────────────────────────────────────
 
-    /**
-     * Find an active API key by its hash.
-     */
-    public static ApiKeyEntity findByHash(String keyHash) {
-        return find("keyHash = ?1 AND active = true", keyHash).firstResult();
+    public static Uni<ApiKeyEntity> findByHash(String keyHash) {
+        return find("keyHash = ?1 and active = true", keyHash).firstResult();
     }
 
-    /**
-     * Find all API keys for a tenant.
-     */
-    public static List<ApiKeyEntity> findByTenant(UUID tenantId) {
-        return list("tenantId = ?1 ORDER BY createdAt DESC", tenantId);
+    public static Uni<List<ApiKeyEntity>> findByTenant(UUID tenantId) {
+        return find("tenantId = ?1 order by createdAt desc", tenantId).list();
     }
 
-    /**
-     * Find only active API keys for a tenant.
-     */
-    public static List<ApiKeyEntity> findActiveTenantKeys(UUID tenantId) {
-        return list("tenantId = ?1 AND active = true ORDER BY createdAt DESC", tenantId);
+    public static Uni<List<ApiKeyEntity>> findActiveTenantKeys(UUID tenantId) {
+        return find("tenantId = ?1 and active = true order by createdAt desc", tenantId).list();
     }
 
-    // ============================================
-    // BUSINESS METHODS
-    // ============================================
+    // ── Business methods ──────────────────────────────────────────────────────
 
-    /**
-     * Check if the key has expired.
-     */
     public boolean isExpired() {
-        return expiresAt != null && Instant.now().isAfter(expiresAt);
+        return expiresAt != null && OffsetDateTime.now().isAfter(expiresAt);
     }
 
-    /**
-     * Check if the key is valid (active and not expired).
-     */
     public boolean isValid() {
         return active && !isExpired();
     }
 
-    /**
-     * Revoke this API key.
-     */
     public void revoke(String revokedBy) {
-        this.active = false;
-        this.revokedAt = Instant.now();
+        this.active    = false;
+        this.revokedAt = OffsetDateTime.now();
         this.revokedBy = revokedBy;
     }
 
-    /**
-     * Record that this key was just used.
-     */
     public void recordUsage() {
-        this.lastUsedAt = Instant.now();
+        this.lastUsedAt = OffsetDateTime.now();
         this.usageCount++;
     }
 
-    /**
-     * Check if this key has a specific scope.
-     */
     public boolean hasScope(String scope) {
         if (scopes == null || scopes.isEmpty()) {
-            return true; // No scopes = full access
+            return true;
         }
-        return scopes.contains("\"" + scope + "\"") || scopes.contains("\"*\"");
+        return scopes.contains(scope) || scopes.contains("*");
     }
 }

@@ -1,24 +1,30 @@
 package com.decisionmesh.persistence.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.UuidGenerator;
 import org.hibernate.type.SqlTypes;
 
-import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 @Entity
-@Table(name = "policy_evaluations", indexes = {
-        @Index(name = "idx_poleval_intent", columnList = "intent_id"),
-        @Index(name = "idx_poleval_tenant", columnList = "tenant_id")
-})
+@Table(
+        name = "policy_evaluations",
+        indexes = {
+                @Index(name = "idx_poleval_intent", columnList = "intent_id"),
+                @Index(name = "idx_poleval_tenant", columnList = "tenant_id")
+        }
+)
 public class PolicyEvaluationEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @UuidGenerator
     @Column(name = "id", updatable = false, nullable = false)
     public UUID id;
 
@@ -32,10 +38,10 @@ public class PolicyEvaluationEntity extends PanacheEntityBase {
     public UUID tenantId;
 
     @Column(name = "phase", nullable = false, length = 50)
-    public String phase;              // PRE_SUBMISSION, PRE_EXECUTION, POST_EXECUTION, CONTINUOUS
+    public String phase;
 
     @Column(name = "result", nullable = false, length = 50)
-    public String result = "ALLOWED"; // ALLOWED, WARNING, VIOLATION
+    public String result = "ALLOWED";
 
     @Column(name = "enforcement_mode", nullable = false, length = 50)
     public String enforcementMode = "LOG_ONLY";
@@ -53,16 +59,18 @@ public class PolicyEvaluationEntity extends PanacheEntityBase {
     @Column(name = "attempt_number")
     public Integer attemptNumber;
 
+    @CreationTimestamp
     @Column(name = "evaluated_at", nullable = false, updatable = false)
-    public Instant evaluatedAt = Instant.now();
+    public OffsetDateTime evaluatedAt;
 
-    // ── Finders ───────────────────────────────────────────────────────
+    // ── Reactive finders ──────────────────────────────────────────────
 
-    public static List<PolicyEvaluationEntity> findByIntent(UUID intentId) {
-        return list("intentId = ?1 ORDER BY evaluatedAt ASC", intentId);
+    public static Uni<List<PolicyEvaluationEntity>> findByIntent(UUID intentId) {
+        return find("intentId = ?1 order by evaluatedAt asc", intentId).list();
     }
 
-    public static List<PolicyEvaluationEntity> findViolationsByTenant(UUID tenantId) {
-        return list("tenantId = ?1 AND result = 'VIOLATION' ORDER BY evaluatedAt DESC", tenantId);
+    public static Uni<List<PolicyEvaluationEntity>> findViolationsByTenant(UUID tenantId) {
+        return find("tenantId = ?1 and result = 'VIOLATION' order by evaluatedAt desc",
+                tenantId).list();
     }
 }

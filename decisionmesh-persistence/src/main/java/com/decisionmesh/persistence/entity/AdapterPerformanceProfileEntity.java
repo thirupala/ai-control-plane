@@ -1,14 +1,19 @@
 package com.decisionmesh.persistence.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.annotations.UuidGenerator;
 
-import java.time.Instant;
-import java.util.Optional;
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "adapter_performance_profiles",
+@Table(
+        name = "adapter_performance_profiles",
         uniqueConstraints = @UniqueConstraint(
                 name = "uq_profile_adapter_tenant",
                 columnNames = {"adapter_id", "tenant_id"}
@@ -21,7 +26,7 @@ import java.util.UUID;
 public class AdapterPerformanceProfileEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @UuidGenerator
     @Column(name = "id", updatable = false, nullable = false)
     public UUID id;
 
@@ -68,37 +73,36 @@ public class AdapterPerformanceProfileEntity extends PanacheEntityBase {
     public boolean isDegraded = false;
 
     @Column(name = "degraded_since")
-    public Instant degradedSince;
+    public OffsetDateTime degradedSince;
 
     @Column(name = "degraded_reason", length = 255)
     public String degradedReason;
 
     @Column(name = "last_executed_at")
-    public Instant lastExecutedAt;
+    public OffsetDateTime lastExecutedAt;
 
     @Version
     @Column(name = "version", nullable = false)
     public int version = 0;
 
+    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    public Instant createdAt = Instant.now();
+    public OffsetDateTime createdAt;
 
+    @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
-    public Instant updatedAt = Instant.now();
+    public OffsetDateTime updatedAt;
 
-    @PreUpdate
-    public void onUpdate() {
-        this.updatedAt = Instant.now();
-    }
+    // ── Reactive finders ──────────────────────────────────────────────
 
-    // ── Finders ───────────────────────────────────────────────────────
-
-    public static Optional<AdapterPerformanceProfileEntity> findByAdapterAndTenant(
+    public static Uni<AdapterPerformanceProfileEntity> findByAdapterAndTenant(
             UUID adapterId, UUID tenantId) {
-        return find("adapterId = ?1 AND tenantId = ?2", adapterId, tenantId).firstResultOptional();
+        return find("adapterId = ?1 and tenantId = ?2", adapterId, tenantId)
+                .firstResult();
     }
 
-    public static java.util.List<AdapterPerformanceProfileEntity> findActiveByTenant(UUID tenantId) {
-        return list("tenantId = ?1 AND isDegraded = false ORDER BY compositeScore DESC", tenantId);
+    public static Uni<List<AdapterPerformanceProfileEntity>> findActiveByTenant(UUID tenantId) {
+        return find("tenantId = ?1 and isDegraded = false order by compositeScore desc", tenantId)
+                .list();
     }
 }

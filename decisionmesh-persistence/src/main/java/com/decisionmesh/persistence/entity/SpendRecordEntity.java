@@ -1,22 +1,29 @@
 package com.decisionmesh.persistence.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import io.quarkus.hibernate.reactive.panache.common.WithSession;
+import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UuidGenerator;
 
 import java.math.BigDecimal;
-import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "spend_records", indexes = {
-        @Index(name = "idx_spend_intent", columnList = "intent_id"),
-        @Index(name = "idx_spend_tenant", columnList = "tenant_id")
-})
+@Table(
+        name = "spend_records",
+        indexes = {
+                @Index(name = "idx_spend_intent", columnList = "intent_id"),
+                @Index(name = "idx_spend_tenant", columnList = "tenant_id")
+        }
+)
 public class SpendRecordEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @UuidGenerator
     @Column(name = "id", updatable = false, nullable = false)
     public UUID id;
 
@@ -41,19 +48,30 @@ public class SpendRecordEntity extends PanacheEntityBase {
     @Column(name = "budget_ceiling_usd", precision = 12, scale = 6)
     public BigDecimal budgetCeilingUsd;
 
+    @CreationTimestamp
     @Column(name = "recorded_at", nullable = false, updatable = false)
-    public Instant recordedAt = Instant.now();
+    public OffsetDateTime recordedAt;
 
-    // ── Finders ───────────────────────────────────────────────────────
+    // ── Reactive finders ──────────────────────────────────────────────────────
 
-    public static List<SpendRecordEntity> findByIntent(UUID intentId) {
-        return list("intentId = ?1 ORDER BY recordedAt ASC", intentId);
+    public static Uni<List<SpendRecordEntity>> findByIntent(UUID intentId) {
+        return find("intentId = ?1 order by recordedAt asc", intentId)
+                .<SpendRecordEntity>list();
     }
 
-    public static BigDecimal totalSpendByIntent(UUID intentId) {
-        return (BigDecimal) getEntityManager()
-                .createQuery("SELECT COALESCE(SUM(s.amountUsd), 0) FROM SpendRecordEntity s WHERE s.intentId = :id")
-                .setParameter("id", intentId)
-                .getSingleResult();
+    /**
+     * Sums total spend for an intent reactively.
+     *
+     * Uses explicit .<SpendRecordEntity>list() type witness so the compiler
+     * resolves the concrete type in the stream — without it, Panache's raw
+     * return type causes "cannot find symbol: variable amountUsd".
+     */
+    @WithSession
+    public static Uni<BigDecimal> totalSpendByIntent(UUID intentId) {
+        return SpendRecordEntity.<SpendRecordEntity>find("intentId = ?1", intentId)
+                .list()
+                .map(records -> records.stream()
+                        .map(r -> r.amountUsd != null ? r.amountUsd : BigDecimal.ZERO)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
     }
 }

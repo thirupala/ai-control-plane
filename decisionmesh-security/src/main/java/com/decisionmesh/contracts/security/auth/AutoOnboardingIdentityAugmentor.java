@@ -1,7 +1,6 @@
 package com.decisionmesh.contracts.security.auth;
 
 import com.decisionmesh.contracts.security.entity.AuthenticatedIdentity;
-import com.decisionmesh.contracts.security.entity.OrganizationEntity;
 import com.decisionmesh.contracts.security.entity.UserEntity;
 import com.decisionmesh.contracts.security.service.TenantService;
 import com.decisionmesh.contracts.security.service.UserOrganizationService;
@@ -19,19 +18,21 @@ import org.jboss.logging.Logger;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Augments the security identity with tenant context after OIDC authentication.
+ * Auto-provisions a tenant + org + membership on first login.
+ *
+ * Fully reactive — all service calls return Uni<T> and are chained
+ * with flatMap. No runBlocking() or .await() calls.
+ */
 @ApplicationScoped
 public class AutoOnboardingIdentityAugmentor implements SecurityIdentityAugmentor {
 
     private static final Logger LOG = Logger.getLogger(AutoOnboardingIdentityAugmentor.class);
 
-    @Inject
-    UserService userService;
-
-    @Inject
-    UserOrganizationService userOrganizationService;
-
-    @Inject
-    TenantService tenantService;
+    @Inject UserService              userService;
+    @Inject UserOrganizationService  userOrganizationService;
+    @Inject TenantService            tenantService;
 
     @Override
     public Uni<SecurityIdentity> augment(SecurityIdentity identity,
@@ -41,86 +42,115 @@ public class AutoOnboardingIdentityAugmentor implements SecurityIdentityAugmento
             return Uni.createFrom().item(identity);
         }
 
-        return context.runBlocking(() -> {
+        String externalId = identity.getPrincipal().getName();
+        String email      = extractClaim(identity, "email");
+        String name       = extractClaim(identity, "name");
 
-            String externalId = identity.getPrincipal().getName();
-            String email      = null;
-            String name       = null;
+        // Step 1 — find or create user
+        return userService.findByExternalUserId(externalId)
+                .flatMap((UserEntity existing) -> {
+                    if (existing != null) {
+                        return Uni.createFrom().item(existing);
+                    }
+                    LOG.infof("First login — creating user: %s", email);
+                    return userService.createExternalUser(externalId, email, name);
+                })
 
-            if (identity.getPrincipal() instanceof OidcJwtCallerPrincipal oidcPrincipal) {
-                email = oidcPrincipal.getClaims().getClaimValueAsString("email");
-                name  = oidcPrincipal.getClaims().getClaimValueAsString("name");
-            }
+                // Step 2 — find or auto-provision tenant
+                .flatMap((UserEntity user) ->
+                        userOrganizationService.findTenantIdByUserId(user.userId)
+                                .flatMap((UUID tenantId) -> {
+                                    if (tenantId != null) {
+                                        // Already has a tenant — skip provisioning
+                                        return Uni.createFrom().item(
+                                                new UserTenant(user, tenantId));
+                                    }
 
-            //  Step 1 — Find or create user
-            UserEntity user = userService.findByExternalUserId(externalId);
-            if (user == null) {
-                LOG.infof("First login — creating user: %s", email);
-                user = userService.createExternalUser(externalId, email, name);
-            }
+                                    LOG.infof("First login — auto-provisioning tenant for: %s",
+                                            email);
 
-            //  Step 2 — Find or auto-provision tenant (industry standard)
-            UUID tenantId = userOrganizationService
-                    .findTenantIdByUserId(user.userId)
-                    .orElse(null);
+                                    String orgName = deriveOrgName(name, email);
+                                    String idempotencyKey = "auto-tenant-" + user.userId;
 
-            if (tenantId == null) {
-                LOG.infof("First login — auto-provisioning tenant for: %s", email);
+                                    return tenantService.createTenant(orgName, idempotencyKey)
+                                            .flatMap((UUID newTenantId) ->
+                                                    tenantService.createDefaultOrganization(
+                                                                    newTenantId, orgName)
+                                                            .flatMap(org ->
+                                                                    userOrganizationService
+                                                                            .createMembership(
+                                                                                    user.userId,
+                                                                                    org.id,
+                                                                                    newTenantId,
+                                                                                    "OWNER")
+                                                                            .invoke(m -> LOG.infof(
+                                                                                    "Auto-provisioned tenant=%s org=%s user=%s",
+                                                                                    newTenantId, org.id, email))
+                                                                            .map(m -> new UserTenant(
+                                                                                    user, newTenantId))
+                                                            )
+                                            );
+                                })
+                )
 
-                // Derive org name from user's name or email
-                String orgName = (name != null && !name.isBlank())
-                        ? name + "'s Organization"
-                        : email.split("@")[0] + "'s Organization";
+                // Step 3 — build augmented security identity
+                .map((UserTenant ut) -> {
+                    QuarkusSecurityIdentity.Builder builder =
+                            QuarkusSecurityIdentity.builder(identity);
 
-                // Idempotency key tied to user — safe to retry
-                String idempotencyKey = "auto-tenant-" + user.userId;
+                    if (ut.user.isActive) {
+                        Set<String> roles = Set.of("tenant_user");
 
-                tenantId = tenantService.createTenant(orgName, idempotencyKey);
+                        builder.addCredential(new AuthenticatedIdentity(
+                                ut.user.userId,
+                                ut.tenantId,
+                                ut.user.email,
+                                ut.user.name != null ? ut.user.name : ut.user.email,
+                                roles
+                        ));
 
-                OrganizationEntity org = tenantService.createDefaultOrganization(
-                        tenantId, orgName
-                );
+                        builder.addRole("tenant_user");
+                        builder.addAttribute("userId",   ut.user.userId);
+                        builder.addAttribute("tenantId", ut.tenantId);
+                        builder.addAttribute("email",    ut.user.email);
 
-                userOrganizationService.createMembership(
-                        user.userId,
-                        org.id,
-                        tenantId,
-                        "OWNER"
-                );
+                        LOG.debugf("Identity built: userId=%s tenantId=%s email=%s",
+                                ut.user.userId, ut.tenantId, ut.user.email);
+                    } else {
+                        LOG.warnf("Inactive user attempted login: %s", email);
+                    }
 
-                LOG.infof("Auto-provisioned tenant=%s org=%s for user=%s",
-                        tenantId, org.id, email);
-            }
+                    return (SecurityIdentity) builder.build();
+                });
+    }
 
-            //  Step 3 — Build security identity
-            QuarkusSecurityIdentity.Builder builder =
-                    QuarkusSecurityIdentity.builder(identity);
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-            if (user.isActive) {
+    private String extractClaim(SecurityIdentity identity, String claim) {
+        if (identity.getPrincipal() instanceof OidcJwtCallerPrincipal oidc) {
+            return oidc.getClaims().getClaimValueAsString(claim);
+        }
+        return null;
+    }
 
-                Set<String> roles = Set.of("tenant_user");
+    private String deriveOrgName(String name, String email) {
+        if (name != null && !name.isBlank()) {
+            return name + "'s Organization";
+        }
+        if (email != null && email.contains("@")) {
+            return email.split("@")[0] + "'s Organization";
+        }
+        return "My Organization";
+    }
 
-                builder.addCredential(new AuthenticatedIdentity(
-                        user.userId,
-                        tenantId,       //  always populated now
-                        user.email,
-                        user.name != null ? user.name : user.email,
-                        roles
-                ));
+    // ── Typed holder ─────────────────────────────────────────────────────────
 
-                builder.addRole("tenant_user");
-                builder.addAttribute("userId",   user.userId);
-                builder.addAttribute("tenantId", tenantId);
-                builder.addAttribute("email",    user.email);
-
-                LOG.debugf("Identity built: userId=%s tenantId=%s email=%s",
-                        user.userId, tenantId, user.email);
-
-            } else {
-                LOG.warnf("Inactive user attempted login: %s", email);
-            }
-
-            return builder.build();
-        });
+    private static final class UserTenant {
+        final UserEntity user;
+        final UUID       tenantId;
+        UserTenant(UserEntity user, UUID tenantId) {
+            this.user     = user;
+            this.tenantId = tenantId;
+        }
     }
 }

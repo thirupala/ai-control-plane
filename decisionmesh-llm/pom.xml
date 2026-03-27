@@ -2,11 +2,10 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- ── Inherit Quarkus BOM + compiler settings from root parent ──────── -->
     <parent>
         <groupId>com.decisionmesh</groupId>
         <artifactId>decisionmesh</artifactId>
@@ -16,40 +15,12 @@
 
     <artifactId>decisionmesh-llm</artifactId>
     <packaging>jar</packaging>
-    <description>
-        Provider-agnostic LLM adapter layer.
-        Implements ExecutionEngine + AdapterLearningPort from decisionmesh-application.
-        Depends on: decisionmesh-domain, decisionmesh-application.
-        Is NOT a dependency of decisionmesh-application (that would be circular).
-    </description>
 
     <properties>
-        <!-- maven.compiler.release=25 and quarkus.platform.version=3.31.1 inherited from parent -->
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <vertx.version>4.5.7</vertx.version>
-        <micrometer.version>1.12.5</micrometer.version>
-        <wiremock.version>2.35.0</wiremock.version>
+        <wiremock.version>3.3.1</wiremock.version>
     </properties>
 
-    <!--
-        Dependency graph (no cycles):
-
-        decisionmesh-domain
-               ↑
-        decisionmesh-application  (defines ports: ExecutionEngine, AdapterLearningPort, Planner)
-               ↑
-        decisionmesh-llm          (implements those ports: LlmExecutionEngine, etc.)
-               ↑
-        decisionmesh-runner       (Quarkus app that wires everything together)
-
-        Quarkus BOM is imported by the parent pom — do NOT re-declare it here.
-        Re-declaring it overrides the parent version (3.31.1) with the child version,
-        causing the "Unsupported class file major version 69" ASM error at test time.
-    -->
-
     <dependencies>
-
-        <!-- ── Internal ───────────────────────────────────────────────────── -->
 
         <dependency>
             <groupId>com.decisionmesh</groupId>
@@ -60,8 +31,6 @@
             <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-application</artifactId>
         </dependency>
-
-        <!-- ── Quarkus (version managed by parent BOM) ────────────────────── -->
 
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -85,30 +54,24 @@
 
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-agroal</artifactId>
+            <artifactId>quarkus-micrometer</artifactId>
         </dependency>
 
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-micrometer</artifactId>
+            <artifactId>quarkus-rest-client-jackson</artifactId>
         </dependency>
 
-        <!-- ── Non-BOM managed ────────────────────────────────────────────── -->
-
         <dependency>
-            <groupId>io.vertx</groupId>
-            <artifactId>vertx-core</artifactId>
-            <version>${vertx.version}</version>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-fault-tolerance</artifactId>
         </dependency>
 
         <dependency>
             <groupId>org.eclipse.microprofile.config</groupId>
             <artifactId>microprofile-config-api</artifactId>
-            <version>3.1</version>
             <scope>provided</scope>
         </dependency>
-
-        <!-- ── Test ───────────────────────────────────────────────────────── -->
 
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -123,8 +86,8 @@
         </dependency>
 
         <dependency>
-            <groupId>com.github.tomakehurst</groupId>
-            <artifactId>wiremock-jre8</artifactId>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
             <version>${wiremock.version}</version>
             <scope>test</scope>
         </dependency>
@@ -140,22 +103,10 @@
 
     <build>
         <plugins>
-
-            <!-- Jandex index — required for Quarkus CDI bean discovery -->
             <plugin>
                 <groupId>io.smallrye</groupId>
                 <artifactId>jandex-maven-plugin</artifactId>
-                <version>3.1.6</version>
-                <executions>
-                    <execution>
-                        <id>make-index</id>
-                        <goals>
-                            <goal>jandex</goal>
-                        </goals>
-                    </execution>
-                </executions>
             </plugin>
-
         </plugins>
     </build>
 

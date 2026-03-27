@@ -68,7 +68,6 @@ public class ControlPlaneOrchestrator {
     @Inject TelemetryPublisher         telemetry;
     @Inject ReconciliationService      reconciliationService;
     @Inject PlanRepositoryPort         planRepository;
-    @Inject jakarta.persistence.EntityManager em;
 
     // -------------------------------------------------------------------------
     // Configuration
@@ -221,7 +220,6 @@ public class ControlPlaneOrchestrator {
 
                 // 1. Persist intent FIRST
                 .flatMap(v -> intentRepository.save(intent))
-                .invoke(v -> em.flush())
 
                 // 2. Immediately persist CREATED event
                 .flatMap(v -> {
@@ -420,10 +418,10 @@ public class ControlPlaneOrchestrator {
     protected Uni<Void> finalizeIntent(Intent intent, ExecutionRecord executionRecord) {
         if (executionRecord.isSuccess()) {
             BigDecimal driftScore = computeDriftScore(intent, executionRecord);
-            intent.updateDriftScore(driftScore, executionRecord.getId());
+            intent.updateDriftScore(driftScore, executionRecord.getExecutionId());
             intent.markSatisfied();                               // EVALUATING → COMPLETED (SATISFIED)
             Log.infof("Intent SATISFIED: id=%s, cost=$%.6f, drift=%.4f, attempts=%d",
-                    intent.getId(), executionRecord.getCostUsd(), driftScore,
+                    intent.getId(), executionRecord.getCost(), driftScore,
                     executionRecord.getAttemptNumber());
         } else {
             intent.markViolated();                                // EVALUATING → COMPLETED (VIOLATED)

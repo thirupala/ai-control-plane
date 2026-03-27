@@ -1,25 +1,31 @@
 package com.decisionmesh.persistence.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.UuidGenerator;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
-import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 @Entity
-@Table(name = "intent_plan_steps", indexes = {
-        @Index(name = "idx_plan_steps_plan",   columnList = "plan_id"),
-        @Index(name = "idx_plan_steps_intent", columnList = "intent_id")
-})
+@Table(
+        name = "intent_plan_steps",
+        indexes = {
+                @Index(name = "idx_plan_steps_plan",   columnList = "plan_id"),
+                @Index(name = "idx_plan_steps_intent", columnList = "intent_id")
+        }
+)
 public class IntentPlanStepEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @UuidGenerator
     @Column(name = "id", updatable = false, nullable = false)
     public UUID id;
 
@@ -36,10 +42,10 @@ public class IntentPlanStepEntity extends PanacheEntityBase {
     public int stepOrder = 0;
 
     @Column(name = "adapter_id")
-    public UUID adapterId;          // null = dynamic selection by engine
+    public UUID adapterId;
 
     @Column(name = "step_type", nullable = false, length = 50)
-    public String stepType = "PRIMARY";  // PRIMARY, FALLBACK, PARALLEL, ENSEMBLE_MEMBER
+    public String stepType = "PRIMARY";
 
     @Column(name = "is_conditional", nullable = false)
     public boolean isConditional = false;
@@ -58,16 +64,17 @@ public class IntentPlanStepEntity extends PanacheEntityBase {
     @Column(name = "estimated_latency_ms")
     public Long estimatedLatencyMs;
 
+    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    public Instant createdAt = Instant.now();
+    public OffsetDateTime createdAt;
 
-    // ── Finders ───────────────────────────────────────────────────────
+    // ── Reactive finders ──────────────────────────────────────────────
 
-    public static List<IntentPlanStepEntity> findByPlanOrdered(UUID planId) {
-        return list("planId = ?1 ORDER BY stepOrder ASC", planId);
+    public static Uni<List<IntentPlanStepEntity>> findByPlanOrdered(UUID planId) {
+        return find("planId = ?1 order by stepOrder asc", planId).list();
     }
 
-    public static List<IntentPlanStepEntity> findByIntentOrdered(UUID intentId) {
-        return list("intentId = ?1 ORDER BY stepOrder ASC", intentId);
+    public static Uni<List<IntentPlanStepEntity>> findByIntentOrdered(UUID intentId) {
+        return find("intentId = ?1 order by stepOrder asc", intentId).list();
     }
 }

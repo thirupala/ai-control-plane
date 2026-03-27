@@ -242,24 +242,24 @@ public class LlmExecutionEngine implements ExecutionEngine {
     private Uni<Void> updateProfile(Intent intent, SelectedAdapter adapter, ExecutionRecord record) {
         boolean success  = record.isSuccess();                        // actual method
         long    latency  = record.getLatencyMs();                     // actual method
-        double  cost     = record.getCostUsd() != null               // actual method
-                ? record.getCostUsd().doubleValue() : record.getCost();
+        double  cost     = record.getCost() !=null               // actual method
+                ? record.getCost().doubleValue() : 0;
         double  risk     = 0.0;                                       // not on ExecutionRecord
 
         return profileUni(success, intent.getTenantId(), adapter.adapterId(),
                 adapter.provider(), adapter.model(), adapter.region(),
-                latency, cost, risk, record.getId(), intent.getId());
+                latency, cost, risk, record.getExecutionId(), intent.getId());
     }
 
     private Uni<Void> persistProfileFromStep(Intent intent, PlanStep step, ExecutionRecord record) {
         boolean success = record.isSuccess();
         long    latency = record.getLatencyMs();
-        double  cost    = record.getCostUsd() != null
-                ? record.getCostUsd().doubleValue() : record.getCost();
+        double  cost    = record.getCost() !=null
+                ? record.getCost().doubleValue() : 0;
 
         return profileUni(success, intent.getTenantId(), step.getAdapterId(),
                 step.getProvider(), step.getModel(), step.getRegion(),
-                latency, cost, 0.0, record.getId(), intent.getId());
+                latency, cost, 0.0, record.getExecutionId(), intent.getId());
     }
 
     private Uni<Void> profileUni(boolean success, UUID tenantId, UUID adapterId,

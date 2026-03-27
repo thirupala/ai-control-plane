@@ -2,8 +2,9 @@ package com.decisionmesh.infrastructure.llm.prompt;
 
 import com.decisionmesh.domain.intent.Intent;
 import com.decisionmesh.domain.intent.value.IntentObjective;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.List;
 
@@ -12,8 +13,8 @@ import java.util.List;
  *
  * Instead of passing a raw string, we construct:
  *   [
- *     { "role": "system",    "content": "<governance context>" },
- *     { "role": "user",      "content": "<user prompt>" }
+ *     { "role": "system", "content": "<governance context>" },
+ *     { "role": "user",   "content": "<user prompt>" }
  *   ]
  *
  * The system prompt encodes:
@@ -23,26 +24,29 @@ import java.util.List;
  *   - Tenant context (if allowed by compliance policy)
  *
  * This is injected into each provider adapter — adapters call
- * PromptBuilder.build(intent) rather than reading objective.getDescription() directly.
+ * PromptBuilder.buildMessages(intent) rather than reading
+ * objective.getDescription() directly.
  */
 public final class PromptBuilder {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private PromptBuilder() {}
 
     /**
-     * Build the full messages array for Chat-style APIs (OpenAI, Anthropic, DeepSeek, Azure).
+     * Build the full messages array for Chat-style APIs
+     * (OpenAI, Anthropic, DeepSeek, Azure).
      *
-     * @return JsonArray of {role, content} objects
+     * @return ArrayNode of {role, content} objects
      */
-    public static JsonArray buildMessages(Intent intent) {
-        IntentObjective objective = intent.getObjective();
-
+    public static ArrayNode buildMessages(Intent intent) {
         String systemPrompt = buildSystemPrompt(intent);
-        String userPrompt   = buildUserPrompt(objective);
+        String userPrompt   = buildUserPrompt(intent.getObjective());
 
-        return new JsonArray()
-                .add(new JsonObject().put("role", "system").put("content", systemPrompt))
-                .add(new JsonObject().put("role", "user").put("content", userPrompt));
+        ArrayNode messages = MAPPER.createArrayNode();
+        messages.add(messageNode("system", systemPrompt));
+        messages.add(messageNode("user",   userPrompt));
+        return messages;
     }
 
     /**
@@ -50,27 +54,31 @@ public final class PromptBuilder {
      *
      * Gemini does not support a dedicated system role in basic API calls,
      * so we prepend the system context inside the user content block.
+     *
+     * @return ArrayNode of Gemini content objects
      */
-    public static JsonArray buildGeminiContents(Intent intent) {
-        IntentObjective objective = intent.getObjective();
-
+    public static ArrayNode buildGeminiContents(Intent intent) {
         String systemPrompt = buildSystemPrompt(intent);
-        String userPrompt   = buildUserPrompt(objective);
+        String userPrompt   = buildUserPrompt(intent.getObjective());
 
-        // Gemini: single user turn with system context prepended
         String combined = systemPrompt + "\n\n---\n\n" + userPrompt;
 
-        return new JsonArray()
-                .add(new JsonObject()
-                        .put("parts", new JsonArray()
-                                .add(new JsonObject().put("text", combined))));
+        ArrayNode parts = MAPPER.createArrayNode();
+        parts.add(MAPPER.createObjectNode().put("text", combined));
+
+        ObjectNode contentNode = MAPPER.createObjectNode();
+        contentNode.set("parts", parts);
+
+        ArrayNode contents = MAPPER.createArrayNode();
+        contents.add(contentNode);
+        return contents;
     }
 
-    // ── Internal builders ────────────────────────────────────────────────────
+    // ── Internal builders ─────────────────────────────────────────────────────
 
     private static String buildSystemPrompt(Intent intent) {
         IntentObjective objective = intent.getObjective();
-        StringBuilder sb = new StringBuilder();
+        StringBuilder   sb       = new StringBuilder();
 
         sb.append("You are a precise AI assistant operating within a governed AI control plane.\n\n");
 
@@ -115,5 +123,13 @@ public final class PromptBuilder {
             return "Context:\n" + context + "\n\nRequest:\n" + description;
         }
         return description;
+    }
+
+    // ── Helper ────────────────────────────────────────────────────────────────
+
+    private static ObjectNode messageNode(String role, String content) {
+        return MAPPER.createObjectNode()
+                .put("role",    role)
+                .put("content", content);
     }
 }
