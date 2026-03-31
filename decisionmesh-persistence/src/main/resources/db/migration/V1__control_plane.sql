@@ -434,6 +434,27 @@ CREATE TABLE tenant_idempotency
 CREATE INDEX idx_tenant_idempotency_key ON tenant_idempotency (idempotency_key);
 CREATE INDEX idx_tenant_idempotency_tenant ON tenant_idempotency (tenant_id);
 
+ALTER TABLE execution_records
+    ADD COLUMN IF NOT EXISTS response_text           TEXT,
+    ADD COLUMN IF NOT EXISTS quality_score           NUMERIC(5,4),
+    ADD COLUMN IF NOT EXISTS hallucination_risk      NUMERIC(5,4),
+    ADD COLUMN IF NOT EXISTS hallucination_detected  BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS quality_reasoning       VARCHAR(500);
+
+ALTER TABLE intents
+    ADD COLUMN IF NOT EXISTS injection_risk          NUMERIC(5,4) DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_exec_hallucination
+    ON execution_records(hallucination_detected, adapter_id)
+    WHERE hallucination_detected = TRUE;
+
+CREATE INDEX IF NOT EXISTS idx_exec_quality
+    ON execution_records(quality_score, adapter_id)
+    WHERE quality_score IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_intent_injection
+    ON intents(injection_risk)
+    WHERE injection_risk > 0.5;
 -- ============================================================
 -- DONE
 -- ============================================================

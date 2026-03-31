@@ -59,6 +59,14 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-redis-client</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-control-loop</artifactId>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
