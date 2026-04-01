@@ -1,4 +1,5 @@
-package com.decisionmesh.governance.ledger;
+package com.decisionmesh.common.ledger;
+
 
 import java.time.Instant;
 import java.util.UUID;
@@ -46,10 +47,20 @@ public class LedgerEntry {
 
     public String computeDeterministicPayload() {
         return intentId + tenantId + aggregateVersion + eventId + eventType +
-               policySnapshotJson + budgetSnapshotJson + slaSnapshotJson +
-               previousHash + timestamp.toString();
+                policySnapshotJson + budgetSnapshotJson + slaSnapshotJson +
+                previousHash + timestamp.toString();
     }
 
     public String getCurrentHash() { return currentHash; }
     public String getPreviousHash() { return previousHash; }
+    public UUID getIntentId() { return intentId; }
+    public String getTenantId() { return tenantId; }
+    public String getPolicySnapshotJson() { return policySnapshotJson; }
+    public String getBudgetSnapshotJson() { return budgetSnapshotJson; }
+    public String getSlaSnapshotJson() { return slaSnapshotJson; }
+
+    public long getAggregateVersion() { return aggregateVersion; }
+    public UUID getEventId() { return eventId; }
+    public String getEventType() { return eventType; }
+    public Instant getTimestamp() { return timestamp; }
 }

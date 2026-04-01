@@ -1,4 +1,5 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.decisionmesh</groupId>
     <artifactId>decisionmesh</artifactId>
@@ -49,18 +50,12 @@
         <module>decisionmesh-explainability</module>
         <!--  Bootstrap Runtime — Quarkus entry point  -->
         <module>decisionmesh-bootstrap</module>
+        <module>decisionmesh-billing</module>
+        <module>decisionmesh-common</module>
     </modules>
     <dependencyManagement>
         <dependencies>
-            <!--  ══════════════════════════════════════════════
-                             Quarkus BOM — must be first; manages ALL
-                             Quarkus extension versions including
-                             Hibernate Reactive, Mutiny, Vert.x, etc.
-                             Never re-declare quarkus.platform.version
-                             in child poms — it overrides the parent and
-                             causes "Unsupported class file major version"
-                             errors at test time.
-                             ══════════════════════════════════════════════  -->
+
             <dependency>
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>${quarkus.platform.artifact-id}</artifactId>
@@ -151,6 +146,12 @@
                 <artifactId>decisionmesh-formal-spec</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <groupId>com.decisionmesh</groupId>
+                <artifactId>decisionmesh-billing</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
     <build>

@@ -1,4 +1,4 @@
-package com.decisionmesh.governance.hash;
+package com.decisionmesh.common.hash;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

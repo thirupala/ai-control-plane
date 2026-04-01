@@ -8,26 +8,7 @@
     </parent>
     <artifactId>decisionmesh-bootstrap</artifactId>
     <packaging>jar</packaging>
-    <!--
-            Quarkus runtime entry point — wires all modules together.
 
-            Datasource strategy (dual datasource):
-            ┌─────────────────────────────────────────────────────────┐
-            │  quarkus.datasource.reactive.*   → Hibernate Reactive   │
-            │  quarkus.datasource.jdbc.*       → Flyway ONLY          │
-            │                                                         │
-            │  quarkus.hibernate-orm.enabled = false                  │
-            │  quarkus.flyway.migrate-at-start = true                 │
-            └─────────────────────────────────────────────────────────┘
-
-            See src/main/resources/application.properties for full config.
-
-            Changed from original:
-            ✗ quarkus-hibernate-orm    → replaced by quarkus-hibernate-reactive-panache
-            ✓ quarkus-jdbc-postgresql  → KEPT but for Flyway JDBC datasource only
-            ✓ quarkus-flyway           → KEPT (runs migrations at startup via JDBC)
-            ✓ quarkus-reactive-pg-client → NEW (application query path)
-         -->
     <dependencies>
         <!--  ── Internal modules ────────────────────────────────────────────  -->
         <dependency>
@@ -49,6 +30,14 @@
         <dependency>
             <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-llm</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-cqrs</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-governance</artifactId>
         </dependency>
         <dependency>
             <groupId>com.decisionmesh</groupId>

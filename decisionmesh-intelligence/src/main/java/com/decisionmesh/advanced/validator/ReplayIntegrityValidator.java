@@ -1,8 +1,10 @@
 package com.decisionmesh.advanced.validator;
 
-import com.decisionmesh.governance.ledger.LedgerEntry;
+import com.decisionmesh.common.ledger.LedgerEntry;
+import com.decisionmesh.governance.snapshot.PolicySnapshot;
 import com.decisionmesh.governance.validator.LedgerValidator;
 import com.decisionmesh.domain.event.DomainEvent;
+
 import java.util.List;
 
 public class ReplayIntegrityValidator {
@@ -14,9 +16,10 @@ public class ReplayIntegrityValidator {
     }
 
     public void validate(List<LedgerEntry> ledgerEntries,
-                         List<DomainEvent> eventStream) {
+                         List<DomainEvent> eventStream,
+                         PolicySnapshot snapshot) {
 
-        ledgerValidator.validateChain(ledgerEntries);
+        ledgerValidator.validateChain(ledgerEntries, snapshot);
 
         if (ledgerEntries.size() != eventStream.size()) {
             throw new IllegalStateException("Event stream mismatch with ledger entries");

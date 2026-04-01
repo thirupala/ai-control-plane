@@ -2,28 +2,33 @@
 -- V1__complete_decisionmesh_schema.sql
 -- ============================================================
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE
+EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================================================
 -- UTILITIES
 -- ============================================================
 
-CREATE OR REPLACE FUNCTION fn_set_updated_at()
+CREATE
+OR REPLACE FUNCTION fn_set_updated_at()
     RETURNS TRIGGER
     LANGUAGE plpgsql AS
 $$
 BEGIN
-    NEW.updated_at = now();
-    RETURN NEW;
+    NEW.updated_at
+= now();
+RETURN NEW;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION fn_guard_immutable()
+CREATE
+OR REPLACE FUNCTION fn_guard_immutable()
     RETURNS TRIGGER
     LANGUAGE plpgsql AS
 $$
 BEGIN
-    RAISE EXCEPTION 'Immutable record violation: table=% id=%', TG_TABLE_NAME, OLD.id;
+    RAISE
+EXCEPTION 'Immutable record violation: table=% id=%', TG_TABLE_NAME, OLD.id;
 END;
 $$;
 
@@ -129,7 +134,7 @@ CREATE TRIGGER trg_adapters_updated_at
     BEFORE UPDATE
     ON adapters
     FOR EACH ROW
-EXECUTE FUNCTION fn_set_updated_at();
+    EXECUTE FUNCTION fn_set_updated_at();
 
 -- ============================================================
 -- INTENTS
@@ -140,7 +145,7 @@ DROP TABLE IF EXISTS intents;
 
 CREATE TABLE intents
 (
-    id                 UUID         PRIMARY KEY,
+    id                 UUID PRIMARY KEY,
     tenant_id          UUID         NOT NULL,
     user_id            UUID,
     intent_type        VARCHAR(255) NOT NULL,
@@ -160,8 +165,7 @@ CREATE INDEX idx_intents_tenant
 CREATE INDEX idx_intents_tenant_phase
     ON intents (tenant_id, phase, created_at DESC);
 CREATE INDEX idx_intents_terminal
-    ON intents (tenant_id, terminal)
-    WHERE terminal = false;
+    ON intents (tenant_id, terminal) WHERE terminal = false;
 
 -- ============================================================
 -- PLANS
@@ -279,16 +283,14 @@ CREATE TABLE adapter_performance_profiles
 );
 
 CREATE INDEX idx_profile_tenant ON adapter_performance_profiles (tenant_id);
-CREATE INDEX idx_profile_composite ON adapter_performance_profiles (tenant_id, composite_score DESC)
-    WHERE is_degraded = FALSE;
-CREATE INDEX idx_profile_degraded ON adapter_performance_profiles (tenant_id, is_degraded)
-    WHERE is_degraded = TRUE;
+CREATE INDEX idx_profile_composite ON adapter_performance_profiles (tenant_id, composite_score DESC) WHERE is_degraded = FALSE;
+CREATE INDEX idx_profile_degraded ON adapter_performance_profiles (tenant_id, is_degraded) WHERE is_degraded = TRUE;
 
 CREATE TRIGGER trg_profile_updated_at
     BEFORE UPDATE
     ON adapter_performance_profiles
     FOR EACH ROW
-EXECUTE FUNCTION fn_set_updated_at();
+    EXECUTE FUNCTION fn_set_updated_at();
 
 CREATE TABLE adapter_profile_versions
 (
@@ -317,27 +319,31 @@ CREATE TABLE rate_limit_counters
 -- ============================================================
 -- OBSERVABILITY (FINAL VERSION)
 -- ============================================================
-CREATE OR REPLACE FUNCTION fn_guard_immutable()
+CREATE
+OR REPLACE FUNCTION fn_guard_immutable()
     RETURNS TRIGGER AS
 $$
 BEGIN
-    IF TG_OP = 'UPDATE' THEN
+    IF
+TG_OP = 'UPDATE' THEN
         RAISE EXCEPTION 'Immutable record violation: table=% id=% (P0001)',
             TG_TABLE_NAME, OLD.id;
-    ELSIF TG_OP = 'DELETE' THEN
+    ELSIF
+TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Immutable record violation: table=% id=% (P0001)',
             TG_TABLE_NAME, OLD.id;
-    END IF;
-    RETURN NULL;
+END IF;
+RETURN NULL;
 END;
-$$ LANGUAGE plpgsql;
+$$
+LANGUAGE plpgsql;
 CREATE TABLE intent_events
 (
-    id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id             UUID        NOT NULL,
-    intent_id            UUID        NOT NULL,
-    tenant_id            UUID        NOT NULL,
-    version              BIGINT      NOT NULL,
+    id                   UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
+    event_id             UUID         NOT NULL,
+    intent_id            UUID         NOT NULL,
+    tenant_id            UUID         NOT NULL,
+    version              BIGINT       NOT NULL,
     event_type           VARCHAR(255) NOT NULL,
     aggregate_type       VARCHAR(255) NOT NULL DEFAULT 'Intent',
     occurred_at          TIMESTAMPTZ  NOT NULL,
@@ -355,18 +361,18 @@ CREATE TABLE intent_events
     attempt_number       INTEGER,
     adapter_id           UUID,
     policy_id            UUID,
-    drift_score_snapshot NUMERIC(5,  4),
+    drift_score_snapshot NUMERIC(5, 4),
     cost_usd_snapshot    NUMERIC(12, 6),
-    risk_score_snapshot  NUMERIC(5,  4),
+    risk_score_snapshot  NUMERIC(5, 4),
     trace_id             VARCHAR(64),
     span_id              VARCHAR(64),
     parent_span_id       VARCHAR(64),
 
     -- Idempotency: one physical event row per logical event
-    CONSTRAINT uq_intent_events_event_id   UNIQUE (event_id),
+    CONSTRAINT uq_intent_events_event_id UNIQUE (event_id),
 
     -- Optimistic concurrency: one version per aggregate stream
-    CONSTRAINT uq_intent_events_version    UNIQUE (intent_id, version)
+    CONSTRAINT uq_intent_events_version UNIQUE (intent_id, version)
 );
 
 
@@ -390,8 +396,7 @@ CREATE INDEX idx_events_type
 
 -- Distributed trace lookups scoped to tenant (avoids full cross-tenant scan)
 CREATE INDEX idx_events_trace
-    ON intent_events (tenant_id, trace_id)
-    WHERE trace_id IS NOT NULL;
+    ON intent_events (tenant_id, trace_id) WHERE trace_id IS NOT NULL;
 
 
 -- ─── Immutability triggers ───────────────────────────────────────────────────
@@ -400,13 +405,13 @@ CREATE TRIGGER trg_intent_events_no_update
     BEFORE UPDATE
     ON intent_events
     FOR EACH ROW
-EXECUTE FUNCTION fn_guard_immutable();
+    EXECUTE FUNCTION fn_guard_immutable();
 
 CREATE TRIGGER trg_intent_events_no_delete
     BEFORE DELETE
     ON intent_events
     FOR EACH ROW
-EXECUTE FUNCTION fn_guard_immutable();
+    EXECUTE FUNCTION fn_guard_immutable();
 
 CREATE TABLE audit_log
 (
@@ -433,6 +438,83 @@ CREATE TABLE tenant_idempotency
 );
 CREATE INDEX idx_tenant_idempotency_key ON tenant_idempotency (idempotency_key);
 CREATE INDEX idx_tenant_idempotency_tenant ON tenant_idempotency (tenant_id);
+
+CREATE TABLE ledger_entry
+(
+    id                   UUID PRIMARY KEY,
+    intent_id            UUID,
+    tenant_id            VARCHAR(255),
+    aggregate_version    BIGINT,
+    event_id             UUID,
+    event_type           VARCHAR(255),
+    policy_snapshot_json TEXT,
+    budget_snapshot_json TEXT,
+    sla_snapshot_json    TEXT,
+    previous_hash        VARCHAR(255),
+    current_hash         VARCHAR(255),
+    timestamp            TIMESTAMP
+);
+
+CREATE TABLE policy_snapshot
+(
+    id            UUID PRIMARY KEY,
+    intent_id     UUID,
+    version       BIGINT,
+    snapshot_json TEXT
+);
+
+CREATE TABLE processed_event
+(
+    event_id     VARCHAR(255) PRIMARY KEY,
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE credit_ledger
+(
+    id           UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    org_id       UUID        NOT NULL,
+    amount       INTEGER     NOT NULL,
+    reason       VARCHAR(30) NOT NULL,
+    reference_id VARCHAR(255),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_credit_ledger_org_id ON credit_ledger (org_id);
+CREATE INDEX idx_credit_ledger_created_at ON credit_ledger (created_at);
+
+-- Extend subscription table with missing plan tiers
+-- (ALTER only if column already exists with old enum constraint)
+ALTER TABLE subscription
+ALTER
+COLUMN plan TYPE VARCHAR(20);
+
+COMMENT
+ON TABLE  credit_ledger              IS 'Append-only ledger of credit debits and allocations per org';
+COMMENT
+ON COLUMN credit_ledger.reason       IS 'REGISTRATION_GIFT|SUBSCRIPTION|PURCHASE|REFERRAL|INTENT_EXECUTION|RETRY|REFUND|ADMIN_ADJUSTMENT';
+COMMENT
+ON COLUMN credit_ledger.reference_id IS 'intent_id for executions, stripe session_id for purchases';
+
+
+CREATE TABLE decision_traces
+(
+    decision_id       UUID PRIMARY KEY,
+    intent_id         UUID      NOT NULL,
+    tenant_id         VARCHAR   NOT NULL,
+    decision_type     VARCHAR   NOT NULL,
+    inputs_snapshot   JSONB,
+    scoring_snapshot  JSONB,
+    policy_snapshot   JSONB,
+    portfolio_context JSONB,
+    rationale         TEXT,
+    timestamp         TIMESTAMP NOT NULL
+);
+
+CREATE TABLE decision_trace_links
+(
+    parent_decision_id UUID NOT NULL,
+    child_decision_id  UUID NOT NULL,
+    PRIMARY KEY (parent_decision_id, child_decision_id)
+);
 
 -- ============================================================
 -- DONE

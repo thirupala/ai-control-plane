@@ -8,18 +8,7 @@
     </parent>
     <artifactId>decisionmesh-application</artifactId>
     <packaging>jar</packaging>
-    <!--
-            Application orchestration layer — use-cases, ports, and services.
 
-            Dependency rules:
-            ✓ Depends on domain
-            ✓ Declares ports (interfaces) that infrastructure modules implement
-            ✗ Must NOT depend on persistence, security, llm, or streaming
-              (that would invert the dependency direction)
-            ✗ No direct Quarkus runtime extensions — CDI API only
-            ✗ Mutiny version must NOT be pinned here — BOM manages it.
-              Pinning it overrides the parent BOM and causes version skew.
-         -->
     <dependencies>
         <!--  Domain  -->
         <dependency>
@@ -58,6 +47,10 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-redis-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-cqrs</artifactId>
         </dependency>
     </dependencies>
     <build>
