@@ -1,8 +1,20 @@
 import { useState, useEffect } from 'react';
-import { Search, ScrollText } from 'lucide-react';
+import { Search, ScrollText, Download } from 'lucide-react';
 import Page from '../components/shared/Page';
-import { Card, EmptyState, Spinner } from '../components/shared';
+import { Card, EmptyState, Spinner, Button } from '../components/shared';
 import { listAudit } from '../utils/api';
+
+function exportCsv(rows) {
+  const header = 'Time,User,Action,Entity type,Entity ID,Tenant\n';
+  const lines  = rows.map(e =>
+    [e.timestamp, e.userId, e.action, e.entityType, e.entityId, e.tenantId].join(',')
+  );
+  const blob = new Blob([header + lines.join('\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = 'audit-log.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
 import { formatDate, formatRelative, shortId } from '../lib/utils';
 
 export default function AuditLog({ keycloak }) {
@@ -26,7 +38,12 @@ export default function AuditLog({ keycloak }) {
   const rows = data?.content ?? [];
 
   return (
-    <Page title="Audit Log" subtitle={`${data?.totalElements ?? 0} events`}>
+    <Page title="Audit Log" subtitle={`${data?.totalElements ?? 0} events`}
+      action={rows.length > 0 && (
+        <Button variant="secondary" size="sm" onClick={() => exportCsv(rows)}>
+          <Download size={13}/> Export CSV
+        </Button>
+      )}>
       <Card>
         <div className="px-5 py-3 border-b border-slate-100 flex flex-wrap items-center gap-3">
           <div className="relative">

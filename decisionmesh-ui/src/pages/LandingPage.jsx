@@ -273,41 +273,128 @@ const STATS = [
   { value: 'GDPR', label: 'compliant by design' },
 ];
 
-const PLAN_FEATURES = {
-  free: [
-    '1,000 intents / month',
-    '2 adapters',
-    'Budget enforcement',
-    'Basic audit log (30 days)',
-    'Community support',
-  ],
-  pro: [
-    'Unlimited intents',
-    'All adapters',
-    'Policy builder',
-    'Decision replay',
-    'Full audit trail + CSV export',
-    'Drift detection',
-    'Multi-tenancy',
-    'Priority support',
-    'SSO / SAML',
-  ],
-  enterprise: [
-    'Everything in Pro',
-    'Hallucination detection',
-    'Prompt injection protection',
-    'Output quality scoring',
-    'Shadow AI gateway',
-    'Human-in-the-loop gates',
-    'PII detection and masking',
-    'Model version tracking',
-    'Immutable signed audit log',
-    'GDPR data residency controls',
-    'HIPAA / PCI-DSS templates',
-    'Dedicated support + SLA',
-    'Custom contract',
-  ],
-};
+const PLANS = [
+  {
+    key:      'free',
+    name:     'Free',
+    price:    'Free',
+    interval: null,
+    note:     'One-time gift',
+    credits:  null,
+    color:    '#64748b',
+    checkColor: '#22c55e',
+    bg:       'rgba(255,255,255,0.04)',
+    border:   'rgba(255,255,255,0.08)',
+    cta:      'Get started free',
+    ctaStyle: { background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)' },
+    ctaHover: 'rgba(255,255,255,0.14)',
+    features: [
+      '500 credits (one-time)',
+      '2 adapters',
+      'Budget enforcement',
+      'Basic audit (30 days)',
+      'Community support',
+    ],
+  },
+  {
+    key:      'hobby',
+    name:     'Hobby',
+    price:    'Free',
+    interval: null,
+    note:     '2k credits/mo',
+    credits:  '2k credits/mo',
+    color:    '#94a3b8',
+    checkColor: '#94a3b8',
+    bg:       'rgba(255,255,255,0.04)',
+    border:   'rgba(255,255,255,0.08)',
+    cta:      'Start Hobby →',
+    ctaStyle: { background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)' },
+    ctaHover: 'rgba(255,255,255,0.14)',
+    features: [
+      '2,000 credits/month',
+      '3 adapters',
+      'Full audit (90 days)',
+      'Email support',
+    ],
+  },
+  {
+    key:      'builder',
+    name:     'Builder',
+    price:    '$19',
+    interval: '/month',
+    note:     '15k credits/mo',
+    credits:  '15k credits/mo',
+    color:    '#2563eb',
+    checkColor: '#60a5fa',
+    popular:  true,
+    bg:       'linear-gradient(135deg, rgba(37,99,235,0.15), rgba(124,58,237,0.15))',
+    border:   'rgba(37,99,235,0.35)',
+    cta:      'Upgrade to Builder →',
+    ctaStyle: { background: '#2563eb', color: '#fff', border: 'none' },
+    ctaHover: '#1d4ed8',
+    features: [
+      '15,000 credits/month',
+      'All adapters',
+      'Policy builder',
+      'Decision replay',
+      'Full audit + CSV export',
+      'Drift detection',
+      'Priority support',
+      'Overage: $0.002/credit',
+    ],
+  },
+  {
+    key:      'pro',
+    name:     'Pro',
+    price:    '$49',
+    interval: '/month',
+    note:     '60k credits/mo',
+    credits:  '60k credits/mo',
+    color:    '#4f46e5',
+    checkColor: '#818cf8',
+    bg:       'rgba(255,255,255,0.04)',
+    border:   'rgba(79,70,229,0.3)',
+    cta:      'Upgrade to Pro →',
+    ctaStyle: { background: 'rgba(79,70,229,0.15)', color: '#818cf8', border: '1px solid rgba(79,70,229,0.3)' },
+    ctaHover: 'rgba(79,70,229,0.28)',
+    features: [
+      '60,000 credits/month',
+      'Multi-tenancy',
+      '5 team seats',
+      'SSO / SAML',
+      'Human-in-the-loop gates',
+      'Priority support',
+      'Overage: $0.001/credit',
+    ],
+  },
+  {
+    key:      'enterprise',
+    name:     'Enterprise',
+    price:    'Custom',
+    interval: null,
+    note:     'Unlimited',
+    credits:  null,
+    color:    '#7c3aed',
+    checkColor: '#c4b5fd',
+    bg:       'linear-gradient(135deg, rgba(139,92,246,0.12), rgba(244,63,94,0.08))',
+    border:   'rgba(139,92,246,0.3)',
+    topBar:   'linear-gradient(90deg, #8b5cf6, #f43f5e)',
+    cta:      'Contact sales →',
+    ctaHref:  'mailto:sales@decisionmesh.io',
+    ctaStyle: { background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.3)' },
+    ctaHover: 'rgba(139,92,246,0.28)',
+    features: [
+      'Unlimited credits',
+      'PII detection & masking',
+      'Model version tracking',
+      'Immutable signed audit log',
+      'GDPR data residency',
+      'HIPAA / PCI-DSS templates',
+      'BYOK (bring your own API key)',
+      'Dedicated SLA',
+    ],
+  },
+];
 
 // ── Components ────────────────────────────────────────────────────────────────
 function NavBar({ onLogin, onRegister }) {
@@ -347,7 +434,7 @@ function NavBar({ onLogin, onRegister }) {
         {/* Desktop links */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} className="hidden-mobile">
           {['Features', 'How it works', 'Pricing'].map(l => (
-            <a key={l} href={`#${l.toLowerCase().replace(' ', '-')}`}
+            <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`}
               style={{ color: '#9ca3af', fontSize: 14, textDecoration: 'none', padding: '6px 12px', borderRadius: 6 }}
               onMouseEnter={e => e.target.style.color = '#fff'}
               onMouseLeave={e => e.target.style.color = '#9ca3af'}
@@ -393,7 +480,7 @@ function NavBar({ onLogin, onRegister }) {
           display: 'flex', flexDirection: 'column', gap: 12,
         }}>
           {['Features', 'How it works', 'Pricing'].map(l => (
-            <a key={l} href={`#${l.toLowerCase().replace(' ', '-')}`}
+            <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`}
               onClick={() => setOpen(false)}
               style={{ color: '#9ca3af', fontSize: 15, textDecoration: 'none' }}>
               {l}
@@ -1063,119 +1150,115 @@ function Stats() {
 function Pricing({ onRegister }) {
   return (
     <section id="pricing" style={{ background: '#08080a', padding: '80px 24px' }}>
-      <div style={{ maxWidth: 1100, margin: '0 auto', textAlign: 'center' }}>
+      <div style={{ maxWidth: 1240, margin: '0 auto', textAlign: 'center' }}>
         <p style={{ color: '#2563eb', fontSize: 13, fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>Pricing</p>
         <h2 style={{ fontSize: 'clamp(28px, 5vw, 44px)', fontWeight: 700, color: '#fff', letterSpacing: '-1px', marginBottom: 16 }}>
           Simple, transparent pricing
         </h2>
         <p style={{ color: '#6b7280', fontSize: 17, marginBottom: 56 }}>Start free. Scale when you're ready.</p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
-          {/* Free */}
-          <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 16, padding: 32, textAlign: 'left' }}>
-            <p style={{ color: '#9ca3af', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 8 }}>Free</p>
-            <div style={{ marginBottom: 24 }}>
-              <span style={{ fontSize: 48, fontWeight: 700, color: '#fff', letterSpacing: '-2px' }}>$0</span>
-              <span style={{ color: '#6b7280', fontSize: 14 }}> / month</span>
-            </div>
-            <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 24, marginBottom: 28 }}>
-              {PLAN_FEATURES.free.map(f => (
-                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <div style={{ color: '#22c55e', flexShrink: 0 }}><Icon.Check /></div>
-                  <span style={{ color: '#d1d5db', fontSize: 14 }}>{f}</span>
-                </div>
-              ))}
-            </div>
-            <button onClick={onRegister}
-              style={{
-                width: '100%', background: 'rgba(255,255,255,0.08)', color: '#fff',
-                border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10,
-                padding: '12px', fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                transition: 'background 0.15s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.14)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
-            >
-              Get started free
-            </button>
-          </div>
+        {/* 5-column grid — matches billing page exactly */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: 16,
+          alignItems: 'start',
+        }}>
+          {PLANS.map(plan => (
+            <div key={plan.key} style={{
+              background: plan.bg,
+              border: `1px solid ${plan.border}`,
+              borderRadius: 16,
+              padding: '28px 24px',
+              textAlign: 'left',
+              position: 'relative',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}>
+              {/* Top accent bar — Enterprise only */}
+              {plan.topBar && (
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: plan.topBar }} />
+              )}
 
-          {/* Pro */}
-          <div style={{
-            background: 'linear-gradient(135deg, rgba(37,99,235,0.15), rgba(124,58,237,0.15))',
-            border: '1px solid rgba(37,99,235,0.3)', borderRadius: 16, padding: 32, textAlign: 'left',
-            position: 'relative', overflow: 'hidden',
-          }}>
-            <div style={{
-              position: 'absolute', top: 16, right: 16,
-              background: '#2563eb', color: '#fff', fontSize: 10, fontWeight: 700,
-              padding: '3px 8px', borderRadius: 999, letterSpacing: '0.5px',
-            }}>POPULAR</div>
-            <p style={{ color: '#93c5fd', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 8 }}>Pro</p>
-            <div style={{ marginBottom: 24 }}>
-              <span style={{ fontSize: 48, fontWeight: 700, color: '#fff', letterSpacing: '-2px' }}>$49</span>
-              <span style={{ color: '#6b7280', fontSize: 14 }}> / month</span>
-            </div>
-            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 24, marginBottom: 28 }}>
-              {PLAN_FEATURES.pro.map(f => (
-                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <div style={{ color: '#60a5fa', flexShrink: 0 }}><Icon.Check /></div>
-                  <span style={{ color: '#d1d5db', fontSize: 14 }}>{f}</span>
-                </div>
-              ))}
-            </div>
-            <button onClick={onRegister}
-              style={{
-                width: '100%', background: '#2563eb', color: '#fff',
-                border: 'none', borderRadius: 10,
-                padding: '12px', fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                transition: 'background 0.15s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = '#1d4ed8'}
-              onMouseLeave={e => e.currentTarget.style.background = '#2563eb'}
-            >
-              Start Pro trial
-            </button>
-          </div>
+              {/* Most popular badge — Builder */}
+              {plan.popular && (
+                <div style={{
+                  position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)',
+                  background: '#2563eb', color: '#fff', fontSize: 10, fontWeight: 700,
+                  padding: '4px 12px', borderRadius: '0 0 8px 8px', letterSpacing: '0.5px',
+                  whiteSpace: 'nowrap',
+                }}>★ Most popular</div>
+              )}
 
-          {/* Enterprise */}
-          <div style={{
-            background: 'linear-gradient(135deg, rgba(139,92,246,0.12), rgba(244,63,94,0.08))',
-            border: '1px solid rgba(139,92,246,0.3)', borderRadius: 16, padding: 32, textAlign: 'left',
-            position: 'relative', overflow: 'hidden',
-          }}>
-            <div style={{
-              position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-              background: 'linear-gradient(90deg, #8b5cf6, #f43f5e)',
-            }} />
-            <p style={{ color: '#c4b5fd', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 8 }}>Enterprise</p>
-            <div style={{ marginBottom: 8 }}>
-              <span style={{ fontSize: 36, fontWeight: 700, color: '#fff', letterSpacing: '-1px' }}>Custom</span>
+              {/* Plan name + dot */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, marginTop: plan.popular ? 12 : 0 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: plan.color, flexShrink: 0 }} />
+                <p style={{ color: plan.color, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  {plan.name}
+                </p>
+              </div>
+
+              {/* Price */}
+              <div style={{ marginBottom: 4 }}>
+                <span style={{ fontSize: 40, fontWeight: 700, color: '#fff', letterSpacing: '-2px', lineHeight: 1 }}>
+                  {plan.price}
+                </span>
+                {plan.interval && (
+                  <span style={{ color: '#6b7280', fontSize: 13, marginLeft: 2 }}>{plan.interval}</span>
+                )}
+              </div>
+
+              {/* Credits note */}
+              <p style={{ color: plan.popular ? '#60a5fa' : plan.key === 'pro' ? '#818cf8' : '#6b7280', fontSize: 12, fontWeight: 600, marginBottom: 20 }}>
+                {plan.note}
+              </p>
+
+              {/* Feature list */}
+              <div style={{ flex: 1, marginBottom: 24 }}>
+                {plan.features.map(f => (
+                  <div key={f} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+                    <div style={{ color: plan.checkColor, flexShrink: 0, marginTop: 1 }}><Icon.Check /></div>
+                    <span style={{ color: '#d1d5db', fontSize: 13, lineHeight: 1.4 }}>{f}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* CTA button */}
+              {plan.ctaHref ? (
+                <a href={plan.ctaHref}
+                  style={{
+                    display: 'block', textAlign: 'center', borderRadius: 10,
+                    padding: '11px', fontSize: 14, fontWeight: 600,
+                    textDecoration: 'none', transition: 'background 0.15s',
+                    ...plan.ctaStyle,
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = plan.ctaHover}
+                  onMouseLeave={e => e.currentTarget.style.background = plan.ctaStyle.background}
+                >
+                  {plan.cta}
+                </a>
+              ) : (
+                <button onClick={onRegister}
+                  style={{
+                    width: '100%', borderRadius: 10, padding: '11px',
+                    fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                    transition: 'background 0.15s',
+                    ...plan.ctaStyle,
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = plan.ctaHover}
+                  onMouseLeave={e => e.currentTarget.style.background = plan.ctaStyle.background}
+                >
+                  {plan.cta}
+                </button>
+              )}
             </div>
-            <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 24 }}>Compliance, governance and dedicated support</p>
-            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 24, marginBottom: 28 }}>
-              {PLAN_FEATURES.enterprise.map(f => (
-                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <div style={{ color: '#c4b5fd', flexShrink: 0 }}><Icon.Check /></div>
-                  <span style={{ color: '#d1d5db', fontSize: 14 }}>{f}</span>
-                </div>
-              ))}
-            </div>
-            <a href="mailto:sales@decisionmesh.io"
-              style={{
-                display: 'block', width: '100%', textAlign: 'center',
-                background: 'rgba(139,92,246,0.15)', color: '#c4b5fd',
-                border: '1px solid rgba(139,92,246,0.3)', borderRadius: 10,
-                padding: '12px', fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                textDecoration: 'none', transition: 'background 0.15s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = 'rgba(139,92,246,0.25)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'rgba(139,92,246,0.15)'}
-            >
-              Contact sales
-            </a>
-          </div>
+          ))}
         </div>
+
+        <p style={{ color: '#4b5563', fontSize: 13, marginTop: 32 }}>
+          Payments processed securely by Stripe · Cancel anytime · No hidden fees
+        </p>
       </div>
     </section>
   );
