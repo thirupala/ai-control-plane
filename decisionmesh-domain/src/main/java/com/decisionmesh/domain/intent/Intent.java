@@ -24,21 +24,13 @@ import java.util.*;
  * Two deserialization paths — intentionally separate:
  *
  *   fromRequest()          — REST inbound via JAX-RS body deserialization.
- *                            Maps only client-supplied fields (intentType,
- *                            objective, constraints, budget). Server fields
- *                            (tenantId, userId, phase, version etc.) are set
- *                            by the orchestrator after construction.
- *                            Annotated @JsonCreator(mode=PROPERTIES) so JAX-RS
- *                            Jackson can instantiate it from the request body.
+ *   fromJson(json, mapper) — Redis rehydration.
  *
- *   fromJson(json, mapper) — Redis rehydration. Maps all fields including
- *                            server-managed state. Uses manual tree-parsing to
- *                            handle DriftScore (@JsonValue double) and legacy
- *                            float timestamps. Sets rehydrated=true to suppress
- *                            the CREATED event on reload.
- *
- * Serialization: toJson(mapper) — caller supplies the Quarkus CDI ObjectMapper
- * (JavaTimeModule registered, WRITE_DATES_AS_TIMESTAMPS disabled).
+ * injectionRisk (added V5):
+ *   Set during PLANNING phase by PromptInjectionGuardService via flagInjectionRisk().
+ *   Nullable — null means not yet scanned or risk = 0.
+ *   Named flagInjectionRisk() rather than setInjectionRisk() to match the domain
+ *   verb pattern (markSatisfied, scheduleRetry, updateDriftScore).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public final class Intent {
@@ -59,19 +51,18 @@ public final class Intent {
     private Budget     budget;
     private DriftScore driftScore;
 
+    // V5 — injection risk score from PromptInjectionGuardService (nullable)
+    private BigDecimal injectionRisk;
+
     private boolean terminal;
     private long    version;
 
     private final Instant createdAt;
     private       Instant updatedAt;
 
-    // Domain events — in-memory only, never serialized.
-    // Drained by pullDomainEvents() before each save.
     @JsonIgnore
     private final List<DomainEvent> events = new ArrayList<>();
 
-    // Suppresses CREATED event when rehydrating from Redis.
-    // Private, no getter — never serialized.
     @JsonIgnore
     private final boolean rehydrated;
 
@@ -91,6 +82,7 @@ public final class Intent {
                    int maxRetries,
                    Budget budget,
                    DriftScore driftScore,
+                   BigDecimal injectionRisk,
                    boolean terminal,
                    long version,
                    Instant createdAt,
@@ -109,15 +101,13 @@ public final class Intent {
         this.maxRetries        = maxRetries;
         this.budget            = budget;
         this.driftScore        = driftScore;
+        this.injectionRisk     = injectionRisk;
         this.terminal          = terminal;
         this.version           = version;
         this.createdAt         = createdAt;
         this.updatedAt         = updatedAt;
         this.rehydrated        = rehydrated;
 
-        // emit() silently skips when tenantId is null — so fromRequest() path
-        // (tenantId=null) defers to setTenantId() for the CREATED event.
-        // rehydrated=true suppresses entirely on Redis reload.
         if (!rehydrated) {
             emit(IntentEventType.CREATED);
         }
@@ -147,6 +137,7 @@ public final class Intent {
                 IntentPhase.CREATED, SatisfactionState.UNKNOWN,
                 0, constraints.maxRetries(),
                 budget, DriftScore.of(0.0),
+                null,   // injectionRisk — not yet scanned
                 false, 0L,
                 Instant.now(), Instant.now(),
                 false
@@ -154,16 +145,7 @@ public final class Intent {
     }
 
     // =========================================================================
-    // REST FACTORY — JAX-RS request body deserialization.
-    //
-    // @JsonCreator(mode=PROPERTIES): tells Jackson this is a property-based
-    // creator. @JsonProperty on every parameter is REQUIRED — without it
-    // Jackson cannot bind JSON fields to arguments and throws
-    // InvalidDefinitionException.
-    //
-    // This annotation is safe for Redis rehydration because fromJson() uses
-    // mapper.readTree() + manual construction and never calls
-    // mapper.readValue(json, Intent.class).
+    // REST FACTORY — JAX-RS request body deserialization
     // =========================================================================
 
     @JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
@@ -180,12 +162,12 @@ public final class Intent {
 
         return new Intent(
                 UUID.randomUUID(),
-                null,   // tenantId — bound via setTenantId() in resource
-                null,   // userId   — bound via setUserId()   in resource
+                null, null,
                 intentType, objective, constraints,
                 IntentPhase.CREATED, SatisfactionState.UNKNOWN,
                 0, constraints.maxRetries(),
                 budget, DriftScore.of(0.0),
+                null,   // injectionRisk — not yet scanned
                 false, 0L,
                 Instant.now(), Instant.now(),
                 false
@@ -205,12 +187,6 @@ public final class Intent {
         }
     }
 
-    /**
-     * Redis rehydration — manual tree-parsing because:
-     *   - DriftScore uses @JsonValue (plain double), not a nested object
-     *   - parseTimestamp() handles both ISO-8601 and legacy float epochs
-     *   - rehydrated=true is hardcoded — cannot come from the JSON
-     */
     public static Intent fromJson(String json, ObjectMapper mapper) {
         try {
             JsonNode root = mapper.readTree(json);
@@ -237,10 +213,8 @@ public final class Intent {
                     ? SatisfactionState.valueOf(root.get("satisfactionState").asText())
                     : SatisfactionState.UNKNOWN;
 
-            int retryCount = root.hasNonNull("retryCount")
-                    ? root.get("retryCount").asInt(0) : 0;
-            int maxRetries = root.hasNonNull("maxRetries")
-                    ? root.get("maxRetries").asInt(0) : 0;
+            int retryCount = root.hasNonNull("retryCount")  ? root.get("retryCount").asInt(0)  : 0;
+            int maxRetries = root.hasNonNull("maxRetries")   ? root.get("maxRetries").asInt(0)  : 0;
 
             Budget budget = root.hasNonNull("budget")
                     ? mapper.treeToValue(root.get("budget"), Budget.class)
@@ -250,15 +224,16 @@ public final class Intent {
                     ? root.get("driftScore").asDouble(0.0) : 0.0;
             DriftScore driftScore = DriftScore.of(rawDrift);
 
-            boolean terminal = root.hasNonNull("terminal")
-                    && root.get("terminal").asBoolean(false);
-            long version = root.hasNonNull("version")
-                    ? root.get("version").asLong(0L) : 0L;
+            // injectionRisk — nullable, only present in V5+ records
+            BigDecimal injectionRisk = root.hasNonNull("injectionRisk")
+                    ? BigDecimal.valueOf(root.get("injectionRisk").asDouble(0.0))
+                    : null;
 
-            Instant createdAt = root.hasNonNull("createdAt")
-                    ? parseTimestamp(root, "createdAt") : Instant.now();
-            Instant updatedAt = root.hasNonNull("updatedAt")
-                    ? parseTimestamp(root, "updatedAt") : Instant.now();
+            boolean terminal = root.hasNonNull("terminal") && root.get("terminal").asBoolean(false);
+            long version     = root.hasNonNull("version")  ? root.get("version").asLong(0L) : 0L;
+
+            Instant createdAt = root.hasNonNull("createdAt") ? parseTimestamp(root, "createdAt") : Instant.now();
+            Instant updatedAt = root.hasNonNull("updatedAt") ? parseTimestamp(root, "updatedAt") : Instant.now();
 
             return new Intent(
                     id, tenantId, userId,
@@ -266,14 +241,14 @@ public final class Intent {
                     phase, satisfactionState,
                     retryCount, maxRetries,
                     budget, driftScore,
+                    injectionRisk,
                     terminal, version,
                     createdAt, updatedAt,
-                    true   // rehydrated=true — suppresses CREATED event
+                    true
             );
 
         } catch (Exception e) {
-            throw new IllegalStateException(
-                    "Failed to deserialise Intent from JSON", e);
+            throw new IllegalStateException("Failed to deserialise Intent from JSON", e);
         }
     }
 
@@ -286,8 +261,6 @@ public final class Intent {
         }
         return Instant.parse(value.asText());
     }
-
-    // ── JSON helpers ──────────────────────────────────────────────────────────
 
     private static UUID safeUUID(JsonNode root, String field) {
         JsonNode node = root.get(field);
@@ -313,11 +286,9 @@ public final class Intent {
 
     public void startPlanning() {
         if (phase == IntentPhase.RETRY_SCHEDULED) {
-            transition(IntentPhase.RETRY_SCHEDULED, IntentPhase.PLANNING,
-                    IntentEventType.PLANNING_STARTED);
+            transition(IntentPhase.RETRY_SCHEDULED, IntentPhase.PLANNING, IntentEventType.PLANNING_STARTED);
         } else {
-            transition(IntentPhase.CREATED, IntentPhase.PLANNING,
-                    IntentEventType.PLANNING_STARTED);
+            transition(IntentPhase.CREATED, IntentPhase.PLANNING, IntentEventType.PLANNING_STARTED);
         }
     }
 
@@ -345,11 +316,9 @@ public final class Intent {
 
     public void scheduleRetry() {
         if (phase != IntentPhase.EXECUTING)
-            throw new IllegalStateException(
-                    "Retry only allowed from EXECUTING phase, current: " + phase);
+            throw new IllegalStateException("Retry only allowed from EXECUTING phase, current: " + phase);
         if (retryCount >= this.maxRetries)
-            throw new IllegalStateException(
-                    "Max retries exceeded: " + retryCount + "/" + maxRetries);
+            throw new IllegalStateException("Max retries exceeded: " + retryCount + "/" + maxRetries);
         retryCount++;
         phase = IntentPhase.RETRY_SCHEDULED;
         version++;
@@ -359,8 +328,7 @@ public final class Intent {
 
     public void resumeExecution() {
         if (phase != IntentPhase.RETRY_SCHEDULED)
-            throw new IllegalStateException(
-                    "Can only resume from RETRY_SCHEDULED, current: " + phase);
+            throw new IllegalStateException("Can only resume from RETRY_SCHEDULED, current: " + phase);
         phase = IntentPhase.EXECUTING;
         version++;
         touch();
@@ -375,9 +343,7 @@ public final class Intent {
     }
 
     public void consumeBudget(double amount) {
-        if (terminal)
-            throw new IllegalStateException(
-                    "Cannot consume budget on terminal intent");
+        if (terminal) throw new IllegalStateException("Cannot consume budget on terminal intent");
         this.budget = this.budget.consume(amount);
         version++;
         touch();
@@ -392,15 +358,28 @@ public final class Intent {
         emit(IntentEventType.DRIFT_UPDATED);
     }
 
+    /**
+     * Flag the intent with an injection risk score detected during PLANNING.
+     *
+     * Named flagInjectionRisk() rather than setInjectionRisk() to match the
+     * domain verb pattern (markSatisfied, scheduleRetry, updateDriftScore).
+     * Does not emit a domain event — this is a security annotation, not a
+     * lifecycle transition.
+     */
+    public void flagInjectionRisk(BigDecimal risk) {
+        if (risk == null || risk.compareTo(BigDecimal.ZERO) < 0) return;
+        this.injectionRisk = risk;
+        // No version bump or event — injection risk is a read-only annotation
+        // for the policy engine, not a state machine transition.
+    }
+
     // =========================================================================
     // INTERNAL
     // =========================================================================
 
-    private void transition(IntentPhase expected, IntentPhase next,
-                            IntentEventType eventType) {
+    private void transition(IntentPhase expected, IntentPhase next, IntentEventType eventType) {
         if (terminal)
-            throw new IllegalStateException(
-                    "Cannot transition terminal intent: id=" + id);
+            throw new IllegalStateException("Cannot transition terminal intent: id=" + id);
         if (phase != expected)
             throw new IllegalStateException(String.format(
                     "Invalid transition: expected=%s, actual=%s, next=%s, id=%s",
@@ -412,8 +391,7 @@ public final class Intent {
     }
 
     private void enforceInvariant() {
-        if (phase == IntentPhase.COMPLETED
-                && satisfactionState == SatisfactionState.UNKNOWN)
+        if (phase == IntentPhase.COMPLETED && satisfactionState == SatisfactionState.UNKNOWN)
             throw new IllegalStateException(
                     "Completed intent must have satisfaction state set: id=" + id);
     }
@@ -432,15 +410,8 @@ public final class Intent {
     // SETTERS — orchestrator / resource use only
     // =========================================================================
 
-    /**
-     * Binds tenantId and emits CREATED exactly once.
-     * For intents created via fromRequest(), tenantId starts null and emit()
-     * silently skips in the constructor. This is the single CREATED emission point.
-     * For rehydrated intents, rehydrated=true suppresses the emit.
-     */
     public void setTenantId(UUID tenantId) {
-        if (tenantId == null)
-            throw new IllegalArgumentException("tenantId must not be null");
+        if (tenantId == null) throw new IllegalArgumentException("tenantId must not be null");
         boolean firstTime = this.tenantId == null;
         this.tenantId = tenantId;
         if (firstTime && !rehydrated) {
@@ -449,14 +420,12 @@ public final class Intent {
     }
 
     public void setUserId(UUID userId) {
-        if (userId == null)
-            throw new IllegalArgumentException("userId must not be null");
+        if (userId == null) throw new IllegalArgumentException("userId must not be null");
         this.userId = userId;
     }
 
     public void setId(UUID id) {
-        if (id == null)
-            throw new IllegalArgumentException("id must not be null");
+        if (id == null) throw new IllegalArgumentException("id must not be null");
         this.id = id;
     }
 
@@ -476,6 +445,7 @@ public final class Intent {
     public int                getMaxRetries()        { return maxRetries; }
     public Budget             getBudget()            { return budget; }
     public DriftScore         getDriftScore()        { return driftScore; }
+    public BigDecimal         getInjectionRisk()     { return injectionRisk; }
     public boolean            isTerminal()           { return terminal; }
     public long               getVersion()           { return version; }
     public Instant            getCreatedAt()         { return createdAt; }

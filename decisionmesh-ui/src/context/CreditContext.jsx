@@ -1,0 +1,91 @@
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+
+const CreditContext = createContext(null);
+
+export const MODEL_TIERS = {
+  economy: {
+    label:       'Economy',
+    credits:     1,
+    color:       '#16a34a',
+    bg:          '#f0fdf4',
+    models:      'GPT-4o-mini · Claude Haiku',
+    description: 'Fast & affordable — great for most tasks',
+  },
+  standard: {
+    label:       'Standard',
+    credits:     5,
+    color:       '#2563eb',
+    bg:          '#eff6ff',
+    models:      'GPT-4o · Claude Sonnet',
+    description: 'Best quality for complex reasoning',
+  },
+  premium: {
+    label:       'Premium',
+    credits:     25,
+    color:       '#7c3aed',
+    bg:          '#f5f3ff',
+    models:      'Claude Opus · GPT-4 Turbo',
+    description: 'Maximum capability for critical tasks',
+  },
+};
+
+export function CreditProvider({ keycloak, children }) {
+  const [balance,   setBalance]   = useState(null);   // null = loading
+  const [allocated, setAllocated] = useState(null);   // monthly allocation
+  const [plan,      setPlan]      = useState('free');
+
+  const load = useCallback(async () => {
+    if (!keycloak?.authenticated) return;
+    try {
+      const res = await fetch('http://localhost:8080/api/credits/balance', {
+        headers: { Authorization: `Bearer ${keycloak.token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBalance(data.balance ?? 500);
+        setAllocated(data.monthlyAllocation ?? 500);
+        setPlan(data.plan ?? 'free');
+      } else {
+        // API not ready — default to registration gift
+        setBalance(500); setAllocated(500); setPlan('free');
+      }
+    } catch {
+      setBalance(500); setAllocated(500); setPlan('free');
+    }
+  }, [keycloak?.authenticated]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Optimistically deduct credits when an intent is submitted
+  function deductCredits(tier = 'economy') {
+    const cost = MODEL_TIERS[tier]?.credits ?? 1;
+    setBalance(b => Math.max(0, (b ?? 0) - cost));
+  }
+
+  function refundCredits(tier = 'economy') {
+    const cost = MODEL_TIERS[tier]?.credits ?? 1;
+    setBalance(b => (b ?? 0) + cost);
+  }
+
+  const pct         = allocated ? Math.min(100, ((balance ?? 0) / allocated) * 100) : 100;
+  const isLow       = pct < 20 && pct > 0;
+  const isEmpty     = (balance ?? 1) <= 0;
+  const statusColor = isEmpty ? '#dc2626' : isLow ? '#d97706' : '#16a34a';
+
+  return (
+    <CreditContext.Provider value={{
+      balance, allocated, plan, pct,
+      isLow, isEmpty, statusColor,
+      deductCredits, refundCredits,
+      reload: load,
+    }}>
+      {children}
+    </CreditContext.Provider>
+  );
+}
+
+export function useCredits() {
+  const ctx = useContext(CreditContext);
+  if (!ctx) throw new Error('useCredits must be used inside CreditProvider');
+  return ctx;
+}

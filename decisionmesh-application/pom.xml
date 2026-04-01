@@ -50,7 +50,15 @@
         </dependency>
         <dependency>
             <groupId>com.decisionmesh</groupId>
+<<<<<<< HEAD
             <artifactId>decisionmesh-cqrs</artifactId>
+=======
+            <artifactId>decisionmesh-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-control-loop</artifactId>
+>>>>>>> a76023a8265804ddc29133e816e9ac887df35d9d
         </dependency>
     </dependencies>
     <build>
