@@ -39,13 +39,24 @@ export async function getIntent(keycloak, id) {
 
 export async function listIntents(keycloak, params = {}) {
   const qs = new URLSearchParams(
-    Object.fromEntries(Object.entries(params).filter(([, v]) => v != null))
+      Object.fromEntries(Object.entries(params).filter(([, v]) => v != null))
   ).toString();
   return request(keycloak, `/intents${qs ? `?${qs}` : ''}`);
 }
 
 export async function getIntentEvents(keycloak, id) {
   return request(keycloak, `/intents/${id}/events`);
+}
+
+/**
+ * GET /api/intents/auth/me
+ *
+ * Returns the AuthenticatedIdentity resolved by the server's IdentityAugmentor.
+ * Useful for surfacing tenantId, userId, and roles in the UI without decoding
+ * the JWT client-side.  Matches IntentResource.me().
+ */
+export async function getMe(keycloak) {
+  return request(keycloak, '/intents/auth/me');
 }
 
 export async function getDashboardMetrics(keycloak) {
@@ -95,7 +106,7 @@ export async function getDriftData(keycloak) {
 
 export async function listExecutions(keycloak, params = {}) {
   const qs = new URLSearchParams(
-    Object.fromEntries(Object.entries(params).filter(([, v]) => v != null))
+      Object.fromEntries(Object.entries(params).filter(([, v]) => v != null))
   ).toString();
   return request(keycloak, `/executions${qs ? `?${qs}` : ''}`);
 }
@@ -114,7 +125,11 @@ export async function revokeApiKey(keycloak, id) {
 
 export async function listAudit(keycloak, params = {}) {
   const qs = new URLSearchParams(
-    Object.fromEntries(Object.entries(params).filter(([, v]) => v != null))
+      Object.fromEntries(Object.entries(params).filter(([, v]) => v != null))
   ).toString();
   return request(keycloak, `/audit${qs ? `?${qs}` : ''}`);
+}
+
+export async function getAdapterPerformance(keycloak, id) {
+  return request(keycloak, `/adapters/${id}/performance`);
 }

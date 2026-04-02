@@ -1,5 +1,7 @@
-package com.decisionmesh.llm.learning;
+package com.decisionmesh.persistence.repository;
 
+import com.decisionmesh.persistence.entity.AdapterEntity;
+import com.decisionmesh.persistence.entity.AdapterPerformanceEntity;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.json.JsonObject;
@@ -38,7 +40,7 @@ import java.util.UUID;
  * Alpha = 0.1 (matches AdapterStats in-memory calculation)
  */
 @ApplicationScoped
-public class AdapterPerformanceProfileRepository {
+public class AdapterPerformanceRepository {
 
     private static final double EMA_ALPHA                = 0.1;
     private static final double DEGRADED_THRESHOLD       = 0.60; // success rate below this → degraded
@@ -332,6 +334,14 @@ public class AdapterPerformanceProfileRepository {
              + 0.25 * latencyScore
              + 0.20 * costScore
              + 0.15 * riskPenalty;
+    }
+
+    public Uni<AdapterPerformanceEntity> find(UUID tenantId, UUID adapterId) {
+        return AdapterPerformanceEntity.findByAdapterAndTenant(tenantId, adapterId);
+    }
+
+    public Uni<Void> persist(AdapterPerformanceEntity p) {
+        return AdapterPerformanceEntity.persist(p).replaceWithVoid();
     }
 
     // ── Inner types ───────────────────────────────────────────────────────────

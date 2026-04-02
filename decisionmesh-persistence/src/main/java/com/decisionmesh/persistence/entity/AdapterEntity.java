@@ -1,5 +1,6 @@
 package com.decisionmesh.persistence.entity;
 
+import com.decisionmesh.contracts.security.converter.StringListJsonConverter;
 import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
@@ -10,6 +11,8 @@ import org.hibernate.annotations.UuidGenerator;
 import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -66,17 +69,33 @@ public class AdapterEntity extends PanacheEntityBase {
     @Column(name = "avg_latency_ms")
     public Long avgLatencyMs;
 
+    // ── JSONB fields — initialised to safe defaults so nullable=false columns
+    // are never written as SQL NULL by Hibernate on first persist.
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "config", columnDefinition = "jsonb", nullable = false)
-    public Map<String, Object> config;
+    public Map<String, Object> config = new HashMap<>();
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "capability_flags", columnDefinition = "jsonb", nullable = false)
-    public Map<String, Object> capabilityFlags;
+    public Map<String, Object> capabilityFlags = new HashMap<>();
 
-    @JdbcTypeCode(SqlTypes.JSON)
+    // ⚠ DO NOT use @JdbcTypeCode(SqlTypes.JSON) here.
+    //
+    // Hibernate Reactive's ReactiveJsonJdbcType routes every @JdbcTypeCode(JSON)
+    // value through Vert.x new JsonObject(jsonString) before binding to the wire.
+    // JsonObject is hardcoded for JSON *objects* ({...}) — it throws DecodeException
+    // when given a JSON *array* ([...]), regardless of the Java field type:
+    //
+    //   io.vertx.core.json.DecodeException: Failed to decode:
+    //   Cannot deserialize value of type LinkedHashMap from Array value
+    //
+    // @Convert bypasses ReactiveJsonJdbcType entirely: Jackson serialises
+    // List<String> → "[\"CHAT\",\"SUMMARIZATION\"]" and Hibernate binds it
+    // as a plain String to the jsonb column. PostgreSQL JSONB operators
+    // (@> and = '[]'::jsonb) used by AdapterRegistry still work correctly.
+    @Convert(converter = StringListJsonConverter.class)
     @Column(name = "allowed_intent_types", columnDefinition = "jsonb", nullable = false)
-    public List<String> allowedIntentTypes;
+    public List<String> allowedIntentTypes = new ArrayList<>();
 
     @Column(name = "is_active", nullable = false)
     public boolean isActive = true;
@@ -88,6 +107,18 @@ public class AdapterEntity extends PanacheEntityBase {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     public OffsetDateTime updatedAt;
+
+    // ── Lifecycle guard ───────────────────────────────────────────────────────
+    // Secondary safety net: if a caller sets a JSONB field to null after
+    // construction, the @PrePersist resets it to the empty default so Hibernate
+    // never attempts to write SQL NULL into a nullable=false jsonb column.
+    @PrePersist
+    @PreUpdate
+    void initJsonbDefaults() {
+        if (config              == null) config              = new HashMap<>();
+        if (capabilityFlags     == null) capabilityFlags     = new HashMap<>();
+        if (allowedIntentTypes  == null) allowedIntentTypes  = new ArrayList<>();
+    }
 
     // ── Reactive finders ──────────────────────────────────────────────────────
 

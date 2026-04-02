@@ -23,7 +23,7 @@ import java.util.UUID;
                 @Index(name = "idx_profile_composite", columnList = "tenant_id, composite_score")
         }
 )
-public class AdapterPerformanceProfileEntity extends PanacheEntityBase {
+public class AdapterPerformanceEntity extends PanacheEntityBase {
 
     @Id
     @UuidGenerator
@@ -95,13 +95,16 @@ public class AdapterPerformanceProfileEntity extends PanacheEntityBase {
 
     // ── Reactive finders ──────────────────────────────────────────────
 
-    public static Uni<AdapterPerformanceProfileEntity> findByAdapterAndTenant(
-            UUID adapterId, UUID tenantId) {
-        return find("adapterId = ?1 and tenantId = ?2", adapterId, tenantId)
+    public static Uni<AdapterPerformanceEntity> findByAdapterAndTenant(
+            UUID tenantId, UUID adapterId) {
+
+        return find("tenantId = ?1 and adapterId = ?2",
+                tenantId, adapterId)
                 .firstResult();
     }
 
-    public static Uni<List<AdapterPerformanceProfileEntity>> findActiveByTenant(UUID tenantId) {
+
+    public static Uni<List<AdapterPerformanceEntity>> findActiveByTenant(UUID tenantId) {
         return find("tenantId = ?1 and isDegraded = false order by compositeScore desc", tenantId)
                 .list();
     }

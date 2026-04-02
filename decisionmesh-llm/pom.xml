@@ -98,6 +98,10 @@
             <version>3.25.3</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.decisionmesh</groupId>
+            <artifactId>decisionmesh-persistence</artifactId>
+        </dependency>
 
     </dependencies>
 

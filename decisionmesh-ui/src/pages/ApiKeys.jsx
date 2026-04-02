@@ -23,7 +23,7 @@ const SCOPES = [
   { id: 'executions:read', label: 'Read executions', desc: 'GET /api/executions' },
   { id: 'analytics:read',  label: 'Read analytics',  desc: 'GET /api/analytics/*' },
   { id: 'audit:read',      label: 'Read audit log',  desc: 'GET /api/audit' },
-  { id: 'adapters:write',  label: 'Manage adapters', desc: 'POST/PUT/DELETE /api/adapters' },
+  { id: 'adapters:write',  label: 'Manage adapters', desc: 'POST/PUT/DELETE ' },
   { id: 'policies:write',  label: 'Manage policies', desc: 'POST/PUT/DELETE /api/policies' },
 ];
 

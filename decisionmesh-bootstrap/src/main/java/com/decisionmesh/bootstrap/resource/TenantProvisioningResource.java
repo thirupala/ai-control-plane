@@ -1,4 +1,4 @@
-package com.decisionmesh.bootstrap.api;
+package com.decisionmesh.bootstrap.resource;
 
 
 import io.quarkus.security.identity.SecurityIdentity;

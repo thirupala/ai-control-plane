@@ -1,4 +1,4 @@
-package com.decisionmesh.bootstrap.api;
+package com.decisionmesh.bootstrap.resource;
 
 
 import com.decisionmesh.billing.service.CreditLedgerService;

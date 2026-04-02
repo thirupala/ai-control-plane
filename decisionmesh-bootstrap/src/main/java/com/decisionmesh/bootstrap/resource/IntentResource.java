@@ -1,9 +1,12 @@
-package com.decisionmesh.bootstrap.api;
+package com.decisionmesh.bootstrap.resource;
 
 import com.decisionmesh.application.service.ControlPlaneOrchestrator;
+import com.decisionmesh.bootstrap.dto.IntentEventDto;
+import com.decisionmesh.bootstrap.dto.IntentPageResponse;
 import com.decisionmesh.bootstrap.dto.IntentSummaryDto;
 import com.decisionmesh.contracts.security.entity.AuthenticatedIdentity;
 import com.decisionmesh.domain.intent.Intent;
+import com.decisionmesh.persistence.repository.IntentEventRepository;
 import com.decisionmesh.persistence.repository.IntentRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
@@ -29,6 +32,7 @@ public class IntentResource {
     @Inject ControlPlaneOrchestrator orchestrator;
     @Inject IntentRepository         intentRepository;
     @Inject ObjectMapper             mapper;
+    @Inject IntentEventRepository intentEventRepository;
 
     // ── Identity helper ───────────────────────────────────────────────────────
 
@@ -87,7 +91,7 @@ public class IntentResource {
     @GET
     @WithSession
     @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
-    public Uni<IntentSummaryDto.IntentPageResponse> list(
+    public Uni<IntentPageResponse> list(
             @QueryParam("page")  @DefaultValue("0")              int    page,
             @QueryParam("size")  @DefaultValue("20")             int    size,
             @QueryParam("sort")  @DefaultValue("createdAt,desc") String sort,
@@ -120,8 +124,20 @@ public class IntentResource {
                             .map(e -> IntentSummaryDto.from(e, mapper))
                             .toList();
 
-                    return new IntentSummaryDto.IntentPageResponse(content, total, totalPages, clampedSize, page);
+                    return new IntentPageResponse(content, total, totalPages, clampedSize, page);
                 });
+    }
+
+    @GET
+    @Path("/{intentId}/events")
+    @WithSession
+    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    public Uni<List<IntentEventDto>> getEvents(@PathParam("intentId") UUID intentId) {
+        AuthenticatedIdentity auth = resolveIdentity();
+        return intentEventRepository.findByTenantAndIntent(auth.tenantId(), intentId)
+                .map(events -> events.stream()
+                        .map(IntentEventDto::from)
+                        .toList());
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

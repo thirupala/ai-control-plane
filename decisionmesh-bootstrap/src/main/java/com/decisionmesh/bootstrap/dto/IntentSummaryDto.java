@@ -41,13 +41,7 @@ public record IntentSummaryDto(
 
     // ── Page wrapper ──────────────────────────────────────────────────────────
 
-    public record IntentPageResponse(
-            List<IntentSummaryDto> content,
-            long                   totalElements,
-            int                    totalPages,
-            int                    size,
-            int                    number
-    ) {}
+
 
     // ── Mapper ────────────────────────────────────────────────────────────────
 

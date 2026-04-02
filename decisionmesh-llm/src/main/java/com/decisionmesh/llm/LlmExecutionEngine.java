@@ -6,7 +6,7 @@ import com.decisionmesh.domain.intent.Intent;
 import com.decisionmesh.domain.plan.Plan;
 import com.decisionmesh.domain.plan.PlanStep;
 import com.decisionmesh.domain.value.Budget;
-import com.decisionmesh.llm.learning.AdapterPerformanceProfileRepository;
+import com.decisionmesh.persistence.repository.AdapterPerformanceRepository;
 import com.decisionmesh.llm.persistence.ExecutionRecordRepository;
 import com.decisionmesh.llm.registry.AdapterRegistry;
 import com.decisionmesh.llm.selector.AdapterStats;
@@ -41,7 +41,7 @@ public class LlmExecutionEngine implements ExecutionEngine {
     private final Map<String, LlmAdapter>            adaptersByProvider;
     private final AdapterRegistry                    adapterRegistry;
     private final LlmModelSelector                   modelSelector;
-    private final AdapterPerformanceProfileRepository profileRepository;
+    private final AdapterPerformanceRepository profileRepository;
     private final ExecutionRecordRepository          executionRecordRepository;
     private final MeterRegistry                      meterRegistry;
 
@@ -49,7 +49,7 @@ public class LlmExecutionEngine implements ExecutionEngine {
     public LlmExecutionEngine(Instance<LlmAdapter> adapters,
                                AdapterRegistry adapterRegistry,
                                LlmModelSelector modelSelector,
-                               AdapterPerformanceProfileRepository profileRepository,
+                               AdapterPerformanceRepository profileRepository,
                                ExecutionRecordRepository executionRecordRepository,
                                MeterRegistry meterRegistry) {
         this.adaptersByProvider      = StreamSupport

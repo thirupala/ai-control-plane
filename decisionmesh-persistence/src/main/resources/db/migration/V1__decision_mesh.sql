@@ -1,14 +1,12 @@
 -- ============================================================
 -- V1__complete_decisionmesh_schema.sql
--- Single-file schema — drop and recreate in dev as needed.
+-- All columns folded into CREATE TABLE. No ALTER TABLE anywhere.
 -- ============================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================================================
 -- UTILITY FUNCTIONS
--- Fix 1: fn_guard_immutable was defined twice — keep only the
---        correct version with proper UPDATE/DELETE handling.
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION fn_set_updated_at()
@@ -36,27 +34,32 @@ END;
 $$;
 
 -- ============================================================
--- CORE: TENANTS / USERS / ORGANISATIONS
+-- TENANTS
 -- ============================================================
 
 CREATE TABLE tenants
 (
     id              UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
     organization_id UUID,
-    external_id     VARCHAR(255) UNIQUE NOT NULL,
+    external_id     VARCHAR(255)        NOT NULL,
     name            VARCHAR(255)        NOT NULL,
     status          VARCHAR(50)         NOT NULL DEFAULT 'ACTIVE',
     config          JSONB                        DEFAULT '{}',
     created_at      TIMESTAMPTZ                  DEFAULT now(),
-    updated_at      TIMESTAMPTZ                  DEFAULT now()
+    updated_at      TIMESTAMPTZ                  DEFAULT now(),
+    CONSTRAINT uq_tenants_external_id UNIQUE (external_id)
 );
+
+-- ============================================================
+-- ORGANISATIONS
+-- ============================================================
 
 CREATE TABLE organizations
 (
     id          UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
     tenant_id   UUID        NOT NULL REFERENCES tenants (id),
     name        VARCHAR(255) NOT NULL,
-    description TEXT,
+    description VARCHAR(255),
     config      JSONB                DEFAULT '{}',
     is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
     created_at  TIMESTAMPTZ          DEFAULT now(),
@@ -66,12 +69,14 @@ CREATE TABLE organizations
 CREATE TABLE users
 (
     user_id          UUID PRIMARY KEY    DEFAULT gen_random_uuid(),
-    external_user_id VARCHAR(255) UNIQUE,
-    email            VARCHAR(255) UNIQUE,
+    external_user_id VARCHAR(255),
+    email            VARCHAR(255),
     name             VARCHAR(255),
     is_active        BOOLEAN    NOT NULL DEFAULT TRUE,
     created_at       TIMESTAMPTZ         DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_users_external_user_id UNIQUE (external_user_id),
+    CONSTRAINT uq_users_email            UNIQUE (email)
 );
 
 CREATE TABLE user_organizations
@@ -84,21 +89,20 @@ CREATE TABLE user_organizations
     permissions     JSONB      NOT NULL DEFAULT '[]',
     is_active       BOOLEAN    NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ         DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_user_organizations_user_org UNIQUE (user_id, organization_id)
 );
 
 -- ============================================================
--- UI SUPPORT: ORGANISATIONS / BRANDING / PROJECTS / MEMBERS
--- Fix 13: these tables were missing entirely.
+-- UI SUPPORT: ORGS / BRANDING / PROJECTS / MEMBERS / INVITATIONS
 -- ============================================================
 
--- Simplified org record keyed by tenantId (mirrors OrgEntity.java)
 CREATE TABLE organisations
 (
-    id         UUID PRIMARY KEY,               -- same as tenant_id
+    id         UUID PRIMARY KEY,
     name       VARCHAR(255) NOT NULL,
     plan       VARCHAR(20)  NOT NULL DEFAULT 'FREE',
-    created_at TIMESTAMPTZ          DEFAULT now()
+    created_at TIMESTAMPTZ           DEFAULT now()
 );
 
 CREATE TABLE org_branding
@@ -106,9 +110,9 @@ CREATE TABLE org_branding
     tenant_id     UUID PRIMARY KEY,
     org_name      VARCHAR(255),
     primary_color VARCHAR(7)   DEFAULT '#2563eb',
-    logo_url      TEXT,
-    favicon       TEXT,
-    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
+    logo_url      VARCHAR(255),
+    favicon       VARCHAR(255),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE projects
@@ -116,7 +120,7 @@ CREATE TABLE projects
     id          UUID PRIMARY KEY,
     tenant_id   UUID         NOT NULL,
     name        VARCHAR(255) NOT NULL,
-    description TEXT,
+    description VARCHAR(255),
     environment VARCHAR(50)  NOT NULL DEFAULT 'Production',
     is_default  BOOLEAN      NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ           DEFAULT now()
@@ -128,7 +132,7 @@ CREATE TABLE members
 (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id      UUID        NOT NULL,
-    project_id     UUID,                       -- NULL = org-level member
+    project_id     UUID,
     user_id        UUID        NOT NULL,
     name           VARCHAR(255),
     email          VARCHAR(255),
@@ -138,15 +142,15 @@ CREATE TABLE members
     UNIQUE (tenant_id, user_id, project_id)
 );
 
-CREATE INDEX idx_members_tenant     ON members (tenant_id);
-CREATE INDEX idx_members_project    ON members (project_id);
-CREATE INDEX idx_members_user_id    ON members (user_id);
+CREATE INDEX idx_members_tenant  ON members (tenant_id);
+CREATE INDEX idx_members_project ON members (project_id);
+CREATE INDEX idx_members_user_id ON members (user_id);
 
 CREATE TABLE invitations
 (
     id         UUID PRIMARY KEY,
     tenant_id  UUID         NOT NULL,
-    project_id UUID,                           -- NULL = org-level invitation
+    project_id UUID,
     email      VARCHAR(255) NOT NULL,
     role       VARCHAR(20)  NOT NULL DEFAULT 'VIEWER',
     status     VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
@@ -161,24 +165,30 @@ CREATE INDEX idx_invitations_email  ON invitations (email);
 
 -- ============================================================
 -- API KEYS
--- Fix 4: added user_id, name, scopes, expires_at,
---        last_used_at, revoked_at to match ApiKeyEntity.java
+-- key_id is the PK (matches ApiKeyEntity @Column(name="key_id"))
 -- ============================================================
 
 CREATE TABLE api_keys
 (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID REFERENCES tenants (id),
-    organization_id UUID REFERENCES organizations (id),
-    user_id         UUID,
-    name            VARCHAR(255),
-    key_hash        VARCHAR(255) UNIQUE,
-    key_prefix      VARCHAR(20),
-    scopes          TEXT,                      -- comma-separated
-    created_at      TIMESTAMPTZ      DEFAULT now(),
-    expires_at      TIMESTAMPTZ,
-    last_used_at    TIMESTAMPTZ,
-    revoked_at      TIMESTAMPTZ
+    key_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         UUID REFERENCES tenants (id),
+    organization_id   UUID REFERENCES organizations (id),
+    user_id           UUID,
+    created_by_userid UUID,
+    name              VARCHAR(255),
+    key_hash          VARCHAR(255) UNIQUE,
+    key_prefix        VARCHAR(20),
+    scopes            JSONB            DEFAULT '[]',
+    active            BOOLEAN          DEFAULT TRUE,
+    revoked_at        TIMESTAMPTZ,
+    revoked_by        VARCHAR(255),
+    last_used_at      TIMESTAMPTZ,
+    usage_count       BIGINT           DEFAULT 0,
+    created_at        TIMESTAMPTZ      DEFAULT now(),
+    created_by        VARCHAR(255),
+    expires_at        TIMESTAMPTZ,
+    ip_whitelist      JSONB            DEFAULT '[]',
+    rate_limit        INTEGER
 );
 
 CREATE INDEX idx_api_keys_tenant   ON api_keys (tenant_id);
@@ -187,8 +197,6 @@ CREATE INDEX idx_api_keys_key_hash ON api_keys (key_hash);
 
 -- ============================================================
 -- ADAPTERS
--- Fix 7: added type, endpoint, model_name, api_key_ref
---        to match AdapterEntity.java alongside existing columns.
 -- ============================================================
 
 CREATE TABLE adapters
@@ -196,16 +204,10 @@ CREATE TABLE adapters
     id                   UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
     tenant_id            UUID        NOT NULL REFERENCES tenants (id),
     name                 VARCHAR(255) NOT NULL,
-    -- Java entity fields (AdapterEntity.java)
-    type                 VARCHAR(100),         -- OPENAI, ANTHROPIC, AZURE_OPENAI, CUSTOM
-    endpoint             TEXT,
-    model_name           VARCHAR(255),
-    api_key_ref          VARCHAR(255),
-    -- Extended domain fields (from original schema)
     adapter_type         VARCHAR(100)
         CHECK (adapter_type IN (
-                                'LLM','EMBEDDING','TOOL','RETRIEVAL',
-                                'RERANKER','CLASSIFIER','CUSTOM')),
+                                'LLM', 'EMBEDDING', 'TOOL', 'RETRIEVAL',
+                                'RERANKER', 'CLASSIFIER', 'CUSTOM')),
     provider             VARCHAR(100),
     model_id             VARCHAR(255),
     region               VARCHAR(100),
@@ -231,8 +233,6 @@ CREATE TRIGGER trg_adapters_updated_at
 
 -- ============================================================
 -- INTENTS
--- Fix 2: removed DROP TABLE — pointless in a DROP+CREATE cycle.
--- Fix 9: injection_risk folded directly into CREATE TABLE.
 -- ============================================================
 
 CREATE TABLE intents
@@ -255,66 +255,115 @@ CREATE TABLE intents
 
 CREATE INDEX idx_intents_tenant       ON intents (tenant_id, created_at DESC);
 CREATE INDEX idx_intents_tenant_phase ON intents (tenant_id, phase, created_at DESC);
+CREATE INDEX idx_intents_tenant_type  ON intents (tenant_id, intent_type, created_at DESC);
 CREATE INDEX idx_intents_terminal     ON intents (tenant_id, terminal) WHERE terminal = FALSE;
 CREATE INDEX idx_intent_injection     ON intents (injection_risk) WHERE injection_risk > 0.5;
 
 -- ============================================================
 -- PLANS
+-- All columns from entity + ALTER statements folded in.
 -- ============================================================
 
 CREATE TABLE intent_plans
 (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id    UUID REFERENCES intents (id),
-    tenant_id    UUID REFERENCES tenants (id),
-    plan_version INT              DEFAULT 1
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    intent_id         UUID REFERENCES intents (id),
+    tenant_id         UUID REFERENCES tenants (id),
+    plan_version      INT              DEFAULT 1,
+    strategy          VARCHAR(50)      NOT NULL DEFAULT 'SINGLE_ADAPTER',
+    status            VARCHAR(50)      NOT NULL DEFAULT 'PENDING',
+    was_exploration   BOOLEAN          NOT NULL DEFAULT FALSE,
+    ranking_snapshot  JSONB            NOT NULL DEFAULT '{}',
+    budget_allocation JSONB            NOT NULL DEFAULT '{}',
+    planner_notes     TEXT,
+    created_at        TIMESTAMPTZ  DEFAULT now()
 );
+
+CREATE INDEX idx_plans_intent ON intent_plans (intent_id);
+CREATE INDEX idx_plans_tenant ON intent_plans (tenant_id);
 
 CREATE TABLE intent_plan_steps
 (
-    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    plan_id    UUID REFERENCES intent_plans (id),
-    intent_id  UUID REFERENCES intents (id),
-    tenant_id  UUID REFERENCES tenants (id),
-    adapter_id UUID REFERENCES adapters (id),
-    step_order INT
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    plan_id             UUID REFERENCES intent_plans (id),
+    intent_id           UUID REFERENCES intents (id),
+    tenant_id           UUID REFERENCES tenants (id),
+    adapter_id          UUID REFERENCES adapters (id),
+    step_order          INT,
+    step_type           VARCHAR(50)      NOT NULL DEFAULT 'LLM_CALL',
+    is_conditional      BOOLEAN          NOT NULL DEFAULT FALSE,
+    condition_expr      JSONB,
+    config_snapshot     JSONB            NOT NULL DEFAULT '{}',
+    estimated_cost_usd  NUMERIC(12, 6),
+    estimated_latency_ms BIGINT,
+    created_at          TIMESTAMPTZ  DEFAULT now()
 );
 
+CREATE INDEX idx_plan_steps_plan   ON intent_plan_steps (plan_id);
+CREATE INDEX idx_plan_steps_intent ON intent_plan_steps (intent_id);
+
 -- ============================================================
--- EXECUTION
--- Fix 9: response_text, quality_score, etc. folded into CREATE TABLE.
+-- EXECUTION RECORDS
+-- All columns here — no ALTER TABLE.
 -- ============================================================
 
 CREATE TABLE execution_records
 (
-    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id             UUID REFERENCES intents (id),
-    tenant_id             UUID REFERENCES tenants (id),
-    adapter_id            UUID REFERENCES adapters (id),
-    status                VARCHAR(50),
-    cost_usd              NUMERIC(12, 6),
-    latency_ms            BIGINT,
-    response_text         TEXT,
-    quality_score         NUMERIC(5, 4),
-    hallucination_risk    NUMERIC(5, 4),
-    hallucination_detected BOOLEAN         DEFAULT FALSE,
-    quality_reasoning     VARCHAR(500),
-    executed_at           TIMESTAMPTZ      DEFAULT now()
+    id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    intent_id              UUID REFERENCES intents (id),
+    tenant_id              UUID REFERENCES tenants (id),
+    adapter_id             UUID REFERENCES adapters (id),
+    plan_id                UUID REFERENCES intent_plans (id),
+    plan_step_id           UUID REFERENCES intent_plan_steps (id),
+    status                 VARCHAR(50),
+    cost_usd               NUMERIC(12, 6),
+    latency_ms             BIGINT,
+    prompt_tokens          INT              DEFAULT 0,
+    completion_tokens      INT              DEFAULT 0,
+    total_tokens           INT              DEFAULT 0,
+    risk_score             NUMERIC(5, 4)    DEFAULT 0,
+    failure_reason         VARCHAR(255),
+    response_text          TEXT,
+    quality_score          NUMERIC(5, 4),
+    hallucination_risk     NUMERIC(5, 4),
+    hallucination_detected BOOLEAN          DEFAULT FALSE,
+    quality_reasoning      VARCHAR(500),
+    metadata               JSONB            DEFAULT '{}',
+    executed_at            TIMESTAMPTZ      DEFAULT now()
 );
 
-CREATE INDEX idx_exec_hallucination ON execution_records (hallucination_detected, adapter_id)
+CREATE INDEX idx_exec_tenant_time    ON execution_records (tenant_id, executed_at DESC);
+CREATE INDEX idx_exec_adapter_status ON execution_records (adapter_id, status, executed_at DESC);
+CREATE INDEX idx_exec_hallucination  ON execution_records (hallucination_detected, adapter_id)
     WHERE hallucination_detected = TRUE;
-CREATE INDEX idx_exec_quality       ON execution_records (quality_score, adapter_id)
+CREATE INDEX idx_exec_quality        ON execution_records (quality_score, adapter_id)
     WHERE quality_score IS NOT NULL;
+
+-- ============================================================
+-- SPEND RECORDS
+-- ============================================================
 
 CREATE TABLE spend_records
 (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id    UUID REFERENCES intents (id),
-    execution_id UUID REFERENCES execution_records (id),
-    tenant_id    UUID REFERENCES tenants (id),
-    amount_usd   NUMERIC(12, 6)
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    intent_id          UUID REFERENCES intents (id),
+    execution_id       UUID REFERENCES execution_records (id),
+    tenant_id          UUID REFERENCES tenants (id),
+    adapter_id         UUID REFERENCES adapters (id),
+    amount_usd         NUMERIC(12, 6),
+    token_count        INT              DEFAULT 0,
+    budget_ceiling_usd NUMERIC(12, 6),
+    recorded_at        TIMESTAMPTZ      DEFAULT now()
 );
+
+CREATE INDEX idx_spend_tenant_time    ON spend_records (tenant_id, recorded_at DESC);
+CREATE INDEX idx_spend_adapter_tenant ON spend_records (adapter_id, tenant_id);
+CREATE INDEX idx_spend_intent         ON spend_records (intent_id);
+CREATE INDEX idx_spend_tenant         ON spend_records (tenant_id);
+
+-- ============================================================
+-- SLA / DRIFT
+-- ============================================================
 
 CREATE TABLE sla_windows
 (
@@ -335,65 +384,77 @@ CREATE TABLE intent_drift_evaluations
 
 -- ============================================================
 -- POLICIES
--- Fix 5: added policy_id, type, condition, action,
---        is_active, priority, updated_at to match PolicyEntity.java
 -- ============================================================
 
 CREATE TABLE policies
 (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    policy_id   VARCHAR(255),                 -- business key
-    tenant_id   UUID REFERENCES tenants (id),
-    name        VARCHAR(255),
-    type        VARCHAR(50),                  -- PRE_SUBMISSION, PRE_EXECUTION, POST_EXECUTION
-    policy_type VARCHAR(100),                 -- original domain field
-    condition   TEXT,
-    action      VARCHAR(50),                  -- BLOCK, WARN, LOG
-    is_active   BOOLEAN      NOT NULL DEFAULT TRUE,
-    priority    INTEGER      NOT NULL DEFAULT 0,
-    created_at  TIMESTAMPTZ           DEFAULT now(),
-    updated_at  TIMESTAMPTZ           DEFAULT now(),
-    UNIQUE (policy_id, tenant_id)
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID REFERENCES tenants (id),
+    name             VARCHAR(255),
+    description      TEXT,
+    scope            VARCHAR(50)      NOT NULL DEFAULT 'TENANT',
+    scope_ref_id     UUID,
+    phase            VARCHAR(50)      NOT NULL DEFAULT 'PRE_EXECUTION',
+    enforcement_mode VARCHAR(50)      NOT NULL DEFAULT 'LOG_ONLY',
+    policy_type      VARCHAR(100)     NOT NULL DEFAULT 'CUSTOM_DSL',
+    rule_dsl         JSONB            NOT NULL DEFAULT '{}',
+    priority         INTEGER          NOT NULL DEFAULT 100,
+    is_active        BOOLEAN          NOT NULL DEFAULT TRUE,
+    version          INTEGER          NOT NULL DEFAULT 0,
+    created_at       TIMESTAMPTZ               DEFAULT now(),
+    updated_at       TIMESTAMPTZ               DEFAULT now()
 );
 
 CREATE INDEX idx_policies_tenant ON policies (tenant_id);
+CREATE INDEX idx_policies_phase  ON policies (tenant_id, phase, is_active);
 
 CREATE TABLE policy_evaluations
 (
-    id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id UUID REFERENCES intents (id),
-    policy_id UUID REFERENCES policies (id),
-    tenant_id UUID REFERENCES tenants (id),
-    result    VARCHAR(50)
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    intent_id        UUID REFERENCES intents (id),
+    policy_id        UUID REFERENCES policies (id),
+    tenant_id        UUID REFERENCES tenants (id),
+    adapter_id       UUID REFERENCES adapters (id),
+    result           VARCHAR(50),
+    phase            VARCHAR(50)      NOT NULL DEFAULT 'PRE_EXECUTION',
+    enforcement_mode VARCHAR(50)      NOT NULL DEFAULT 'LOG_ONLY',
+    block_reason     VARCHAR(512),
+    attempt_number   INTEGER,
+    context_snapshot JSONB            NOT NULL DEFAULT '{}',
+    evaluated_at     TIMESTAMPTZ  DEFAULT now()
 );
+
+CREATE INDEX idx_poleval_intent ON policy_evaluations (intent_id);
+CREATE INDEX idx_poleval_tenant ON policy_evaluations (tenant_id);
 
 -- ============================================================
 -- LEARNING / ADAPTER PERFORMANCE
+-- EMA columns as float(53) to match Hibernate ALTER statements.
 -- ============================================================
 
 CREATE TABLE adapter_performance_profiles
 (
-    id                   UUID PRIMARY KEY       DEFAULT gen_random_uuid(),
-    adapter_id           UUID          NOT NULL REFERENCES adapters (id),
-    tenant_id            UUID          NOT NULL REFERENCES tenants (id),
-    ema_cost             NUMERIC(12,6) NOT NULL DEFAULT 0 CHECK (ema_cost >= 0),
-    ema_latency_ms       NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (ema_latency_ms >= 0),
-    ema_success_rate     NUMERIC(5,4)  NOT NULL DEFAULT 1 CHECK (ema_success_rate BETWEEN 0 AND 1),
-    ema_risk_score       NUMERIC(5,4)  NOT NULL DEFAULT 0 CHECK (ema_risk_score BETWEEN 0 AND 1),
-    ema_confidence       NUMERIC(5,4)  NOT NULL DEFAULT 0 CHECK (ema_confidence BETWEEN 0 AND 1),
-    composite_score      NUMERIC(8,6)  NOT NULL DEFAULT 0 CHECK (composite_score >= 0),
-    execution_count      BIGINT        NOT NULL DEFAULT 0 CHECK (execution_count >= 0),
-    success_count        BIGINT        NOT NULL DEFAULT 0 CHECK (success_count >= 0),
-    failure_count        BIGINT        NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
-    cold_start           BOOLEAN       NOT NULL DEFAULT TRUE,
-    cold_start_threshold INT           NOT NULL DEFAULT 10 CHECK (cold_start_threshold > 0),
-    is_degraded          BOOLEAN       NOT NULL DEFAULT FALSE,
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    adapter_id           UUID         NOT NULL REFERENCES adapters (id),
+    tenant_id            UUID         NOT NULL REFERENCES tenants (id),
+    ema_cost             float(53)    NOT NULL DEFAULT 0,
+    ema_latency_ms       float(53)    NOT NULL DEFAULT 0,
+    ema_success_rate     float(53)    NOT NULL DEFAULT 1,
+    ema_risk_score       float(53)    NOT NULL DEFAULT 0,
+    ema_confidence       float(53)    NOT NULL DEFAULT 0,
+    composite_score      float(53)    NOT NULL DEFAULT 0,
+    execution_count      BIGINT       NOT NULL DEFAULT 0,
+    success_count        BIGINT       NOT NULL DEFAULT 0,
+    failure_count        BIGINT       NOT NULL DEFAULT 0,
+    cold_start           BOOLEAN      NOT NULL DEFAULT TRUE,
+    cold_start_threshold INT          NOT NULL DEFAULT 10,
+    is_degraded          BOOLEAN      NOT NULL DEFAULT FALSE,
     degraded_since       TIMESTAMPTZ,
     degraded_reason      VARCHAR(255),
     last_executed_at     TIMESTAMPTZ,
-    version              INT           NOT NULL DEFAULT 0,
-    created_at           TIMESTAMPTZ   NOT NULL DEFAULT now(),
-    updated_at           TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    version              INT          NOT NULL DEFAULT 0,
+    created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
     CONSTRAINT uq_profile_adapter_tenant UNIQUE (adapter_id, tenant_id)
 );
 
@@ -432,7 +493,7 @@ CREATE TABLE rate_limit_counters
 );
 
 -- ============================================================
--- INTENT EVENTS (immutable event store)
+-- INTENT EVENTS (immutable)
 -- ============================================================
 
 CREATE TABLE intent_events
@@ -445,7 +506,7 @@ CREATE TABLE intent_events
     event_type           VARCHAR(255) NOT NULL,
     aggregate_type       VARCHAR(255) NOT NULL DEFAULT 'Intent',
     occurred_at          TIMESTAMPTZ NOT NULL,
-    payload              JSONB       NOT NULL, -- no DEFAULT: missing payload is a bug
+    payload              JSONB       NOT NULL,
     phase_from           VARCHAR(50),
     phase_to             VARCHAR(50),
     actor_id             UUID,
@@ -456,9 +517,9 @@ CREATE TABLE intent_events
     attempt_number       INTEGER,
     adapter_id           UUID,
     policy_id            UUID,
-    drift_score_snapshot NUMERIC(5,4),
-    cost_usd_snapshot    NUMERIC(12,6),
-    risk_score_snapshot  NUMERIC(5,4),
+    drift_score_snapshot NUMERIC(5, 4),
+    cost_usd_snapshot    NUMERIC(12, 6),
+    risk_score_snapshot  NUMERIC(5, 4),
     trace_id             VARCHAR(64),
     span_id              VARCHAR(64),
     parent_span_id       VARCHAR(64),
@@ -466,11 +527,12 @@ CREATE TABLE intent_events
     CONSTRAINT uq_intent_events_version  UNIQUE (intent_id, version)
 );
 
-CREATE INDEX idx_events_intent        ON intent_events (intent_id, occurred_at ASC);
+CREATE INDEX idx_events_intent         ON intent_events (intent_id, occurred_at ASC);
 CREATE INDEX idx_events_intent_version ON intent_events (intent_id, version);
-CREATE INDEX idx_events_tenant_time   ON intent_events (tenant_id, occurred_at DESC);
-CREATE INDEX idx_events_type          ON intent_events (tenant_id, event_type, occurred_at DESC);
-CREATE INDEX idx_events_trace         ON intent_events (tenant_id, trace_id) WHERE trace_id IS NOT NULL;
+CREATE INDEX idx_events_tenant_time    ON intent_events (tenant_id, occurred_at DESC);
+CREATE INDEX idx_events_tenant         ON intent_events (tenant_id);
+CREATE INDEX idx_events_type           ON intent_events (tenant_id, event_type, occurred_at DESC);
+CREATE INDEX idx_events_trace          ON intent_events (tenant_id, trace_id) WHERE trace_id IS NOT NULL;
 
 CREATE TRIGGER trg_intent_events_no_update
     BEFORE UPDATE ON intent_events
@@ -482,20 +544,17 @@ CREATE TRIGGER trg_intent_events_no_delete
 
 -- ============================================================
 -- AUDIT LOG
--- Fix 6: added user_id(varchar), resource_type, resource_id,
---        outcome, detail to match AuditEntity.java +
---        kept original entity_type / entity_id columns.
 -- ============================================================
 
 CREATE TABLE audit_log
 (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id     UUID REFERENCES tenants (id),
-    user_id       VARCHAR(255),               -- Keycloak subject (not FK)
-    entity_type   VARCHAR(100),               -- original domain field
-    entity_id     UUID,                        -- original domain field
-    resource_type VARCHAR(100),               -- Java entity field
-    resource_id   VARCHAR(255),               -- Java entity field
+    user_id       VARCHAR(255),
+    entity_type   VARCHAR(100),
+    entity_id     UUID,
+    resource_type VARCHAR(100),
+    resource_id   VARCHAR(255),
     action        VARCHAR(100),
     outcome       VARCHAR(20)      DEFAULT 'SUCCESS',
     detail        TEXT,
@@ -524,36 +583,35 @@ CREATE INDEX idx_tenant_idempotency_tenant ON tenant_idempotency (tenant_id);
 
 -- ============================================================
 -- GOVERNANCE: LEDGER / POLICY SNAPSHOT / PROCESSED EVENTS
--- Fix 8: processed_event → processed_events (matches Java entity @Table)
+-- Column names match Hibernate camelCase mappings from ALTER.
 -- ============================================================
 
 CREATE TABLE ledger_entry
 (
     id                   UUID PRIMARY KEY,
-    intent_id            UUID,
-    tenant_id            VARCHAR(255),
-    aggregate_version    BIGINT,
-    event_id             UUID,
-    event_type           VARCHAR(255),
-    policy_snapshot_json TEXT,
-    budget_snapshot_json TEXT,
-    sla_snapshot_json    TEXT,
-    previous_hash        VARCHAR(255),
-    current_hash         VARCHAR(255),
+    intentId             UUID,
+    tenantId             VARCHAR(255),
+    aggregateVersion     BIGINT       NOT NULL DEFAULT 0,
+    eventId              UUID,
+    eventType            VARCHAR(255),
+    policySnapshotJson   OID,
+    budgetSnapshotJson   OID,
+    slaSnapshotJson      OID,
+    previousHash         VARCHAR(255),
+    currentHash          VARCHAR(255),
     timestamp            TIMESTAMPTZ
 );
 
-CREATE INDEX idx_ledger_intent ON ledger_entry (intent_id);
+CREATE INDEX idx_ledger_intent ON ledger_entry (intentId);
 
 CREATE TABLE policy_snapshot
 (
-    id            UUID PRIMARY KEY,
-    intent_id     UUID,
-    version       BIGINT,
-    snapshot_json TEXT
+    id           UUID PRIMARY KEY,
+    intentId     UUID,
+    version      BIGINT,
+    snapshotJson OID
 );
 
--- Fix 8: was processed_event (no 's') — Java @Table(name="processed_events")
 CREATE TABLE processed_events
 (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -564,8 +622,8 @@ CREATE TABLE processed_events
 CREATE INDEX idx_processed_events_event_id ON processed_events (event_id);
 
 -- ============================================================
--- BILLING: CREDIT LEDGER / SUBSCRIPTION / BILLING CUSTOMER
--- Fix 3: subscription CREATE TABLE had broken parenthesis formatting.
+-- BILLING
+-- Column names match Hibernate camelCase mappings from ALTER.
 -- ============================================================
 
 CREATE TABLE credit_ledger
@@ -588,29 +646,31 @@ COMMENT ON COLUMN credit_ledger.reference_id IS 'intent_id for executions, strip
 
 CREATE TABLE subscription
 (
-    id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id                 UUID        NOT NULL,
-    stripe_customer_id     VARCHAR(255),
-    stripe_subscription_id VARCHAR(255),
-    plan                   VARCHAR(20) NOT NULL DEFAULT 'FREE',
-    status                 VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
-    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    orgId                UUID,
+    stripeCustomerId     VARCHAR(255),
+    stripeSubscriptionId VARCHAR(255),
+    plan                 VARCHAR(255) NOT NULL DEFAULT 'FREE',
+    status               VARCHAR(255) NOT NULL DEFAULT 'ACTIVE',
+    createdAt            TIMESTAMPTZ(6),
+    updatedAt            TIMESTAMPTZ(6)
 );
 
-CREATE INDEX idx_subscription_org_id     ON subscription (org_id);
-CREATE INDEX idx_subscription_stripe_sub ON subscription (stripe_subscription_id);
+CREATE INDEX idx_subscription_org_id     ON subscription (orgId);
+CREATE INDEX idx_subscription_stripe_sub ON subscription (stripeSubscriptionId);
 
 CREATE TABLE billing_customer
 (
     org_id             UUID PRIMARY KEY,
-    stripe_customer_id VARCHAR(255) NOT NULL UNIQUE
+    orgId              UUID,
+    stripeCustomerId   VARCHAR(255),
+    CONSTRAINT UKf8ybrcbugt66p970i9lmseiaq UNIQUE (stripeCustomerId)
 );
 
-CREATE INDEX idx_billing_customer_stripe ON billing_customer (stripe_customer_id);
+CREATE INDEX idx_billing_customer_stripe ON billing_customer (stripeCustomerId);
 
 -- ============================================================
--- OBSERVABILITY / EXPLAINABILITY / DECISION TRACING
+-- OBSERVABILITY / EXPLAINABILITY
 -- ============================================================
 
 CREATE TABLE decision_traces
@@ -692,11 +752,11 @@ CREATE TABLE global_idempotency
 
 CREATE TABLE lifecycle_audit
 (
-    intent_id  UUID        NOT NULL,
-    phase      VARCHAR     NOT NULL,
-    action     VARCHAR     NOT NULL,
-    version    BIGINT      NOT NULL,
-    timestamp  TIMESTAMPTZ NOT NULL
+    intent_id UUID        NOT NULL,
+    phase     VARCHAR     NOT NULL,
+    action    VARCHAR     NOT NULL,
+    version   BIGINT      NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE drift_tracking
