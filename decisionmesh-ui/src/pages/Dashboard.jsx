@@ -156,30 +156,32 @@ export default function Dashboard({ keycloak }) {
   const [loading,       setLoading]       = useState(true);
 
   useEffect(() => {
-    let active = true;
     async function load() {
       try {
-        // listIntents: sort must be "field,direction" — the controller splits on
-        // the literal comma (parts = sort.split(",", 2)).  URLSearchParams encodes
-        // "," as "%2C"; JAX-RS @QueryParam decodes it before the split, so the
-        // wire format is safe, but we pass it as a pre-built query string to make
-        // the encoding intent explicit and match the controller signature exactly.
-        const [i, c, m] = await Promise.allSettled([
-          listIntents(keycloak, { size: 8, sort: 'createdAt,desc' }),
-          getCostAnalytics(keycloak),
-          getMe(keycloak),
-        ]);
-        if (!active) return;
-        if (i.status === 'fulfilled') setIntents(i.value);
-        if (c.status === 'fulfilled') setCostData(c.value);
-        // getMe() returns AuthenticatedIdentity {tenantId, userId, roles, …}.
-        // Failure (e.g. augmentor not configured) is non-fatal — we just skip it.
-        if (m.status === 'fulfilled' && m.value) setAuthIdentity(m.value);
-      } finally { if (active) setLoading(false); }
+        setLoading(true);
+        // 1. Initial provisioning/identity check
+        const m = await getMe(keycloak);
+        setAuthIdentity(m);
+
+        // 2. Only fetch data if we have a valid tenant context
+        if (m?.tenantId) {
+          const [i, c] = await Promise.all([
+            listIntents(keycloak, { size: 8, sort: 'createdAt,desc' }),
+            getCostAnalytics(keycloak),
+          ]);
+          setIntents(i);
+          setCostData(c);
+        } else {
+          // If no tenantId, it means they are newly provisioned or have no access
+          setIntents({ totalElements: 0, content: [] });
+        }
+      } catch (err) {
+        console.error("Provisioning/Load failed", err);
+      } finally {
+        setLoading(false);
+      }
     }
     load();
-    const t = setInterval(load, 30_000);
-    return () => { active = false; clearInterval(t); };
   }, [keycloak]);
 
   const total     = intents?.totalElements ?? 0;

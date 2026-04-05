@@ -36,8 +36,10 @@ public class UserService {
         if (externalUserId == null || externalUserId.isBlank()) {
             return Uni.createFrom().nullItem();
         }
+        // Using withSession ensures we have a fresh pipeline to the DB
+        // even if called from within a failed transaction block.
         return Panache.withSession(() ->
-                UserEntity.findByExternalUserId(externalUserId)
+                UserEntity.find("externalUserId", externalUserId).firstResult()
         );
     }
 }

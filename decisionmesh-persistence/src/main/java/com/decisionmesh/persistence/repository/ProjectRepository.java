@@ -1,7 +1,7 @@
 
 package com.decisionmesh.persistence.repository;
 
-import com.decisionmesh.persistence.entity.ProjectEntity;
+import com.decisionmesh.contracts.security.entity.ProjectEntity;
 import io.quarkus.hibernate.reactive.panache.PanacheRepositoryBase;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;

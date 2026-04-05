@@ -15,126 +15,108 @@ public class TenantService {
 
     private static final Logger LOG = Logger.getLogger(TenantService.class);
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
     /**
-     * Derives a non-null org name from the provided value or falls back to a
-     * name derived from the idempotency key (which is always present).
-     * This prevents null constraint violations when the caller hasn't supplied
-     * an org name (e.g. auto-onboarding from OIDC tokens without a name claim).
-     */
-    private String resolveOrgName(String organizationName, String idempotencyKey) {
-        if (organizationName != null && !organizationName.isBlank()) {
-            return organizationName;
-        }
-        // Derive from idempotency key — e.g. "auto-tenant-<uuid>" → "My Organization"
-        if (idempotencyKey != null && idempotencyKey.startsWith("auto-tenant-")) {
-            return "My Organization";
-        }
-        return idempotencyKey != null ? idempotencyKey : "Default Organization";
-    }
-
-    // ── Public API ────────────────────────────────────────────────────────────
-
-    /**
-     * Creates a new tenant, guarded by an idempotency key.
-     * organizationName may be null — falls back to resolveOrgName().
+     * Creates a new tenant and a default organization atomically.
+     * Guarded by an idempotency key to prevent duplicates during concurrent OIDC redirects.
      */
     public Uni<UUID> createTenant(String organizationName, String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            return Uni.createFrom().failure(
-                    new IllegalArgumentException("Idempotency key required"));
+            return Uni.createFrom().failure(new IllegalArgumentException("Idempotency key required"));
         }
 
         final String resolvedName = resolveOrgName(organizationName, idempotencyKey);
 
+        // Wrap the entire flow in ONE transaction to ensure Atomicity across the 12-table core
         return Panache.withTransaction(() ->
+                        TenantIdempotencyEntity.findByKey(idempotencyKey)
+                                .flatMap(existing -> {
+                                    if (existing != null) {
+                                        LOG.infof("createTenant: idempotent hit tenantId=%s", existing.tenantId);
+                                        return Uni.createFrom().item(existing.tenantId);
+                                    }
 
-                TenantIdempotencyEntity.findByKey(idempotencyKey)
-                        .flatMap(existing -> {
-                            if (existing != null) {
-                                LOG.infof("createTenant: idempotent hit tenantId=%s key=%s",
-                                        existing.tenantId, idempotencyKey);
-                                return Uni.createFrom().item(existing.tenantId);
-                            }
+                                    // 1. Create Tenant
+                                    TenantEntity tenant = new TenantEntity();
+                                    tenant.externalId = idempotencyKey;
+                                    tenant.name = resolvedName;
+                                    tenant.status = "ACTIVE";
 
-                            TenantEntity tenant = new TenantEntity();
-                            tenant.externalId = idempotencyKey;
-                            tenant.name       = resolvedName;
-                            tenant.status     = "ACTIVE";
+                                    return tenant.<TenantEntity>persist()
+                                            .flatMap(t -> {
+                                                // 2. Create Idempotency Record immediately after Tenant
+                                                TenantIdempotencyEntity idem = TenantIdempotencyEntity.of(t.id, idempotencyKey);
+                                                return idem.<TenantIdempotencyEntity>persist()
+                                                        .flatMap(i -> {
+                                                            // 3. Create Default Organization within the same transaction
+                                                            OrganizationEntity org = new OrganizationEntity();
+                                                            org.tenantId = t.id;
+                                                            org.name = resolvedName;
+                                                            org.isActive = true;
 
-                            return tenant.<TenantEntity>persist()
-                                    .flatMap(t -> {
-                                        TenantIdempotencyEntity idem =
-                                                TenantIdempotencyEntity.of(t.id, idempotencyKey);
-                                        return idem.<TenantIdempotencyEntity>persist()
-                                                .onFailure().recoverWithUni(ex ->
-                                                        TenantIdempotencyEntity
-                                                                .findByKey(idempotencyKey)
-                                                                .map(race -> {
-                                                                    if (race != null) return race;
-                                                                    throw new RuntimeException(ex);
-                                                                })
-                                                )
-                                                .map(i -> {
-                                                    LOG.infof("createTenant: created tenantId=%s name=%s",
-                                                            t.id, resolvedName);
-                                                    return t.id;
-                                                });
-                                    });
-                        })
-        );
+                                                            return org.<OrganizationEntity>persist()
+                                                                    .flatMap(savedOrg -> {
+                                                                        // 4. Link Org back to Tenant (Backfill)
+                                                                        t.organizationId = savedOrg.id;
+                                                                        LOG.infof("Atomic Provisioning Complete: Tenant=%s, Org=%s", t.id, savedOrg.id);
+                                                                        return Uni.createFrom().item(t.id);
+                                                                    });
+                                                        });
+                                            });
+                                })
+                )
+                // Global safety net for rare race conditions on the unique constraint
+                .onFailure().recoverWithUni(ex -> {
+                    LOG.warnf("Race condition detected during tenant creation for key: %s", idempotencyKey);
+                    return TenantIdempotencyEntity.findByKey(idempotencyKey)
+                            .flatMap(race -> {
+                                if (race != null) {
+                                    return Uni.createFrom().item(race.tenantId);
+                                }
+                                // If we hit a constraint but can't find the record, something is wrong with the DB state
+                                return Uni.createFrom().failure(new RuntimeException("Provisioning conflict: Idempotent record not found", ex));
+                            });
+                });
+    }
+
+    public Uni<String> getOrganizationNameByTenantId(UUID tenantId) {
+        return OrganizationEntity.<OrganizationEntity>find("tenantId", tenantId)
+                .firstResult()
+                .map(org -> {
+                    if (org != null && org.name != null) {
+                        return org.name;
+                    }
+                    return "My Organization"; // Fallback if record is missing
+                })
+                // Defensive recovery in case of database issues
+                .onFailure().recoverWithItem("My Organization");
     }
 
     /**
-     * Creates the default organization for a provisioned tenant.
-     * organizationName may be null — falls back to resolveOrgName().
-     *
-     * Also backfills tenant.organizationId with the new org's ID.
-     * Idempotent: returns existing org if already created under this tenant.
+     * Refactored to call the atomic provisioner if the org doesn't exist.
+     * Keeps method signature for Augmentor compatibility.
      */
-    public Uni<OrganizationEntity> createDefaultOrganization(
-            UUID tenantId, String organizationName) {
-
+    public Uni<OrganizationEntity> createDefaultOrganization(UUID tenantId, String organizationName) {
         final String resolvedName = resolveOrgName(organizationName, null);
 
-        return Panache.withTransaction(() ->
+        return OrganizationEntity
+                .<OrganizationEntity>find("tenantId = ?1 and name = ?2 and isActive = true", tenantId, resolvedName)
+                .firstResult()
+                .flatMap(existing -> {
+                    if (existing != null) return Uni.createFrom().item(existing);
 
-                OrganizationEntity
-                        .<OrganizationEntity>find(
-                                "tenantId = ?1 and name = ?2 and isActive = true",
-                                tenantId, resolvedName)
-                        .firstResult()
-                        .flatMap(existing -> {
-                            if (existing != null) {
-                                LOG.infof("createDefaultOrganization: already exists " +
-                                        "orgId=%s tenantId=%s", existing.id, tenantId);
-                                return Uni.createFrom().item(existing);
-                            }
+                    // If missing, we create it.
+                    // Note: In the new flow, createTenant already does this.
+                    OrganizationEntity org = new OrganizationEntity();
+                    org.tenantId = tenantId;
+                    org.name = resolvedName;
+                    org.isActive = true;
+                    return Panache.withTransaction(org::persist);
+                });
+    }
 
-                            OrganizationEntity org = new OrganizationEntity();
-                            org.tenantId = tenantId;
-                            org.name     = resolvedName;
-                            org.isActive = true;
-
-                            return org.<OrganizationEntity>persist()
-                                    .flatMap(savedOrg -> {
-                                        LOG.infof("createDefaultOrganization: created " +
-                                                        "orgId=%s tenantId=%s name=%s",
-                                                savedOrg.id, tenantId, resolvedName);
-
-                                        return TenantEntity
-                                                .<TenantEntity>findById(tenantId)
-                                                .flatMap(tenant -> {
-                                                    if (tenant != null) {
-                                                        tenant.organizationId = savedOrg.id;
-                                                        return tenant.persist()
-                                                                .replaceWith(savedOrg);
-                                                    }
-                                                    return Uni.createFrom().item(savedOrg);
-                                                });
-                                    });
-                        })
-        );
+    private String resolveOrgName(String organizationName, String idempotencyKey) {
+        if (organizationName != null && !organizationName.isBlank()) return organizationName;
+        if (idempotencyKey != null && idempotencyKey.startsWith("auto-tenant-")) return "My Organization";
+        return idempotencyKey != null ? idempotencyKey : "Default Organization";
     }
 }

@@ -33,6 +33,7 @@
             <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-domain</artifactId>
         </dependency>
+
         <!--  ── CDI ─────────────────────────────────────────────────────────  -->
         <dependency>
             <groupId>io.quarkus</groupId>

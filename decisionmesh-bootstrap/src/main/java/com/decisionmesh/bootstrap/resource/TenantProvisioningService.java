@@ -4,7 +4,7 @@ package com.decisionmesh.bootstrap.resource;
 import com.decisionmesh.billing.service.CreditLedgerService;
 import com.decisionmesh.persistence.entity.OrgBrandingEntity;
 import com.decisionmesh.persistence.entity.OrgEntity;
-import com.decisionmesh.persistence.entity.ProjectEntity;
+import com.decisionmesh.contracts.security.entity.ProjectEntity;
 import com.decisionmesh.persistence.repository.OrgRepository;
 import com.decisionmesh.persistence.repository.ProjectRepository;
 import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
