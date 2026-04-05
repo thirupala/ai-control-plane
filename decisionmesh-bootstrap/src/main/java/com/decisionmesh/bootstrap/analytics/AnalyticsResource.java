@@ -41,7 +41,7 @@ public class AnalyticsResource {
      */
     @GET
     @Path("/cost")
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<CostAnalyticsDto> getCostAnalytics(
             @QueryParam("period") @DefaultValue("30d") String period) {
 

@@ -21,9 +21,9 @@ import java.util.UUID;
 public class UserEntity extends PanacheEntityBase {
 
     @Id
-    @UuidGenerator
     @Column(name = "user_id", updatable = false, nullable = false)
     public UUID userId;
+
 
     @Column(name = "external_user_id", unique = true, updatable = false, length = 255)
     public String externalUserId;

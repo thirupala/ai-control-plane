@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.logging.Log;
 
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -18,7 +17,7 @@ import java.util.UUID;
  *
  * Used by GET /api/intents  (IntentsTable page, Dashboard recent list).
  */
-public record IntentSummaryDto(
+public record IntentSummaryResponse(
         UUID            id,
         String          intentType,
         String          phase,
@@ -45,10 +44,10 @@ public record IntentSummaryDto(
 
     // ── Mapper ────────────────────────────────────────────────────────────────
 
-    public static IntentSummaryDto from(IntentEntity entity, ObjectMapper mapper) {
+    public static IntentSummaryResponse from(IntentEntity entity, ObjectMapper mapper) {
         BudgetSummary budget = extractBudget(entity.payload, mapper);
 
-        return new IntentSummaryDto(
+        return new IntentSummaryResponse(
                 entity.id,
                 entity.intentType,
                 entity.phase,

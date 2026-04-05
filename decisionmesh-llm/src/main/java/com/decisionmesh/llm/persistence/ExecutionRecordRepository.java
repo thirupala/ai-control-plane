@@ -147,9 +147,24 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
     private void persist(ExecutionRecord record, Intent intent) {
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
+
+            // FIX 1: BEGIN the transaction explicitly so SET LOCAL takes effect.
+            // SET LOCAL scopes the setting to the current transaction — it has no
+            // effect outside one. With autoCommit=false, a transaction only starts
+            // after the first statement; calling SET LOCAL before any DML meant it
+            // ran in autocommit mode and was immediately reset.
+            conn.createStatement().execute("BEGIN");
             setRls(conn, intent.getTenantId());
 
-            UUID executionId = record.getExecutionId();
+            // FIX 2: getExecutionId() returns null because ExecutionRecord.of() in
+            // the LLM adapters does not supply one. ps.setObject(1, null) sends a
+            // literal NULL to the PK column — PostgreSQL's DEFAULT gen_random_uuid()
+            // only fires when the column is OMITTED, not when NULL is passed explicitly.
+            // This threw a NOT NULL constraint violation, caught and swallowed silently,
+            // leaving execution_records permanently empty → cost analytics showed $0.
+            UUID executionId = record.getExecutionId() != null
+                    ? record.getExecutionId()
+                    : UUID.randomUUID();
 
             String status    = record.isSuccess() ? "SUCCESS"
                     : (record.getFailureReason() != null ? record.getFailureReason() : "ADAPTER_ERROR");

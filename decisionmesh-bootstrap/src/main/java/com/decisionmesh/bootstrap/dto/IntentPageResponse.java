@@ -3,7 +3,7 @@ package com.decisionmesh.bootstrap.dto;
 import java.util.List;
 
 public record IntentPageResponse(
-        List<IntentSummaryDto> content,
+        List<IntentSummaryResponse> content,
         long                   totalElements,
         int                    totalPages,
         int                    size,

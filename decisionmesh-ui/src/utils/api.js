@@ -48,6 +48,10 @@ export async function getIntentEvents(keycloak, id) {
   return request(keycloak, `/intents/${id}/events`);
 }
 
+export async function deleteIntent(keycloak, id) {
+  return request(keycloak, `/intents/${id}`, { method: 'DELETE' });
+}
+
 /**
  * GET /api/intents/auth/me
  *
@@ -115,8 +119,14 @@ export async function listApiKeys(keycloak) {
   return request(keycloak, '/api-keys');
 }
 
-export async function createApiKey(keycloak) {
-  return request(keycloak, '/api-keys', { method: 'POST' });
+export async function createApiKey(keycloak, data) {
+  return request(keycloak, '/api-keys', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  });
 }
 
 export async function revokeApiKey(keycloak, id) {

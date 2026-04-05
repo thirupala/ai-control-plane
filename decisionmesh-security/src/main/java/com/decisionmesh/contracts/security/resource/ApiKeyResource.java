@@ -52,8 +52,10 @@ public class ApiKeyResource {
             @APIResponse(responseCode = "401", description = "Unauthorized")
     })
     public Uni<Response> createKey(@Valid CreateKeyRequest request) {
-        UUID tenantId = tenantContext.tenantId();
-        UUID userId   = getUserId();
+//        UUID tenantId = tenantContext.tenantId();
+//        UUID userId   = getUserId();
+        UUID tenantId = securityIdentity.getAttribute("tenantId");
+        UUID userId = securityIdentity.getAttribute("userId");
 
         // Resolve organizationId: use request value or look up the tenant's default org
         Uni<UUID> orgIdUni = request.organizationId != null

@@ -34,7 +34,7 @@ public class AdapterResource {
     // GET /api/adapters
     // ─────────────────────────────────────────────
     @GET
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<List<AdapterEntity>> list() {
         return service.list(resolveIdentity().tenantId());
     }
@@ -43,7 +43,7 @@ public class AdapterResource {
     // POST /api/adapters
     // ─────────────────────────────────────────────
     @POST
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<AdapterEntity> create(AdapterEntity adapterEntity) {
         return service.create(resolveIdentity().tenantId(), adapterEntity);
     }
@@ -53,7 +53,7 @@ public class AdapterResource {
     // ─────────────────────────────────────────────
     @PUT
     @Path("/{id}")
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<AdapterEntity> update(@PathParam("id") UUID id, AdapterEntity adapterEntity) {
         return service.update(resolveIdentity().tenantId(), id, adapterEntity);
     }
@@ -63,7 +63,7 @@ public class AdapterResource {
     // ─────────────────────────────────────────────
     @PATCH
     @Path("/{id}/status")
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<AdapterEntity> toggle(@PathParam("id") UUID id,
                                      Map<String, Boolean> body) {
         Boolean isActive = body.get("isActive");
@@ -78,7 +78,7 @@ public class AdapterResource {
     // ─────────────────────────────────────────────
     @DELETE
     @Path("/{id}")
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<Void> delete(@PathParam("id") UUID id) {
         return service.delete(resolveIdentity().tenantId(), id);
     }
@@ -88,7 +88,7 @@ public class AdapterResource {
     // ─────────────────────────────────────────────
     @GET
     @Path("/{id}/performance")
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<AdapterPerformanceEntity> performance(@PathParam("id") UUID id) {
         return adapterPerformanceService.get(resolveIdentity().tenantId(), id);
     }

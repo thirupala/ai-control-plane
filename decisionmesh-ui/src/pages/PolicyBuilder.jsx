@@ -79,85 +79,85 @@ function TemplateLibrary({ onSelect, onClose }) {
   const [activeCategory, setActiveCategory] = useState('All');
 
   const filtered = activeCategory === 'All'
-    ? TEMPLATES
-    : TEMPLATES.filter(t => t.category === activeCategory);
+      ? TEMPLATES
+      : TEMPLATES.filter(t => t.category === activeCategory);
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            <BookOpen size={16} className="text-blue-600" />
-            <h3 className="text-sm font-semibold text-slate-800">Policy template library</h3>
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <BookOpen size={16} className="text-blue-600" />
+              <h3 className="text-sm font-semibold text-slate-800">Policy template library</h3>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
-        </div>
 
-        {/* Category filter */}
-        <div className="px-5 py-3 border-b border-slate-100 flex gap-2 flex-wrap shrink-0">
-          {['All', ...categories].map(cat => (
-            <button key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                activeCategory === cat ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}>
-              {cat}
-            </button>
-          ))}
-        </div>
+          {/* Category filter */}
+          <div className="px-5 py-3 border-b border-slate-100 flex gap-2 flex-wrap shrink-0">
+            {['All', ...categories].map(cat => (
+                <button key={cat}
+                        onClick={() => setActiveCategory(cat)}
+                        className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                            activeCategory === cat ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}>
+                  {cat}
+                </button>
+            ))}
+          </div>
 
-        {/* Templates grid */}
-        <div className="overflow-y-auto p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {filtered.map(tpl => (
-            <button key={tpl.id}
-              onClick={() => { onSelect(tpl); onClose(); }}
-              className="text-left p-4 rounded-xl border border-slate-200 hover:border-blue-300 hover:shadow-sm transition-all group">
-              <div className="flex items-start justify-between mb-2">
+          {/* Templates grid */}
+          <div className="overflow-y-auto p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {filtered.map(tpl => (
+                <button key={tpl.id}
+                        onClick={() => { onSelect(tpl); onClose(); }}
+                        className="text-left p-4 rounded-xl border border-slate-200 hover:border-blue-300 hover:shadow-sm transition-all group">
+                  <div className="flex items-start justify-between mb-2">
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                  style={{ backgroundColor: `${tpl.color}18`, color: tpl.color }}>
+                      style={{ backgroundColor: `${tpl.color}18`, color: tpl.color }}>
                   {tpl.category}
                 </span>
-                <Plus size={13} className="text-slate-300 group-hover:text-blue-500 transition-colors" />
-              </div>
-              <p className="text-sm font-semibold text-slate-800 mb-1">{tpl.name}</p>
-              <p className="text-xs text-slate-500 leading-relaxed">{tpl.desc}</p>
-              <div className="mt-3 flex flex-wrap gap-1">
-                {tpl.rules.map((r, i) => (
-                  <span key={i} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">
+                    <Plus size={13} className="text-slate-300 group-hover:text-blue-500 transition-colors" />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-800 mb-1">{tpl.name}</p>
+                  <p className="text-xs text-slate-500 leading-relaxed">{tpl.desc}</p>
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    {tpl.rules.map((r, i) => (
+                        <span key={i} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">
                     {r.metric} {r.operator} {r.value} → {r.action}
                   </span>
-                ))}
-              </div>
-            </button>
-          ))}
-        </div>
-      </Card>
-    </div>
+                    ))}
+                  </div>
+                </button>
+            ))}
+          </div>
+        </Card>
+      </div>
   );
 }
 
 // ── Rule row ──────────────────────────────────────────────────────────────────
 function RuleRow({ rule, onChange, onDelete }) {
   const sel = (key, opts) => (
-    <select value={rule[key]} onChange={e => onChange({ ...rule, [key]: e.target.value })}
-      className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-      {opts.map(o => <option key={o}>{o}</option>)}
-    </select>
+      <select value={rule[key]} onChange={e => onChange({ ...rule, [key]: e.target.value })}
+              className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+        {opts.map(o => <option key={o}>{o}</option>)}
+      </select>
   );
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      {sel('metric',   METRICS)}
-      {sel('operator', OPERATORS)}
-      <input type="number" step="0.001" value={rule.value}
-        onChange={e => onChange({ ...rule, value: parseFloat(e.target.value) })}
-        className="w-24 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-      <span className="text-xs text-slate-400">→</span>
-      {sel('action', ACTIONS)}
-      <button onClick={onDelete} className="p-1 text-slate-300 hover:text-red-500 transition-colors ml-auto">
-        <Trash2 size={13}/>
-      </button>
-    </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        {sel('metric',   METRICS)}
+        {sel('operator', OPERATORS)}
+        <input type="number" step="0.001" value={rule.value}
+               onChange={e => onChange({ ...rule, value: parseFloat(e.target.value) })}
+               className="w-24 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+        <span className="text-xs text-slate-400">→</span>
+        {sel('action', ACTIONS)}
+        <button onClick={onDelete} className="p-1 text-slate-300 hover:text-red-500 transition-colors ml-auto">
+          <Trash2 size={13}/>
+        </button>
+      </div>
   );
 }
 
@@ -165,41 +165,67 @@ function RuleRow({ rule, onChange, onDelete }) {
 function PolicyCard({ policy, onSave, onDelete }) {
   const [form, setForm]     = useState({ ...policy, rules: [...(policy.rules ?? [])] });
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty]   = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+  // New policy (policyId=null) → dirty=true so Save button shows immediately.
+  // Existing policy (policyId set) → dirty=false until user edits.
+  const [dirty, setDirty]   = useState(!policy.policyId);
 
-  function updateRule(id, updated) { setForm(f => ({ ...f, rules: f.rules.map(r => r.id === id ? updated : r) })); setDirty(true); }
+  function updateRule(id, updated) { setForm(f => ({ ...f, rules: f.rules.map(r => r.id === id ? updated : r) })); setDirty(true); setSaveErr(null); }
   function addRule()               { setForm(f => ({ ...f, rules: [...f.rules, NEW_RULE()] })); setDirty(true); }
   function removeRule(id)          { setForm(f => ({ ...f, rules: f.rules.filter(r => r.id !== id) })); setDirty(true); }
 
   async function handleSave() {
+    if (!form.name?.trim()) { setSaveErr('Policy name is required'); return; }
+    if (!form.rules?.length) { setSaveErr('Add at least one rule'); return; }
     setSaving(true);
-    try { await onSave(form); setDirty(false); }
-    finally { setSaving(false); }
+    setSaveErr(null);
+    try {
+      await onSave(form);
+      setDirty(false);
+    } catch (e) {
+      setSaveErr(e?.message ?? 'Save failed — check server logs');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
-        <input value={form.name} onChange={e => { setForm(f => ({...f, name: e.target.value})); setDirty(true); }}
-          placeholder="Policy name…"
-          className="text-sm font-semibold text-slate-800 bg-transparent focus:outline-none border-b border-transparent focus:border-blue-400 pb-0.5"/>
-        <div className="flex gap-2">
-          {dirty && <Button size="sm" loading={saving} onClick={handleSave}>Save</Button>}
-          <Button variant="ghost" size="sm" onClick={() => onDelete(policy.policyId)}>
-            <Trash2 size={13}/>
-          </Button>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <input value={form.name} onChange={e => { setForm(f => ({...f, name: e.target.value})); setDirty(true); }}
+                 placeholder="Policy name…"
+                 className="text-sm font-semibold text-slate-800 bg-transparent focus:outline-none border-b border-transparent focus:border-blue-400 pb-0.5"/>
+          <div className="flex gap-2">
+            {dirty && <Button size="sm" loading={saving} onClick={handleSave}>Save</Button>}
+            <Button variant="ghost" size="sm" onClick={() => onDelete(policy.policyId)}>
+              <Trash2 size={13}/>
+            </Button>
+          </div>
+        </CardHeader>
+        {/* Optional description */}
+        <div className="px-5 pb-0 pt-2">
+          <input
+              value={form.description ?? ''}
+              onChange={e => { setForm(f => ({ ...f, description: e.target.value })); setDirty(true); }}
+              placeholder="Description (optional) — e.g. Reject high-cost calls in production…"
+              className="w-full text-xs text-slate-500 bg-transparent focus:outline-none border-b border-transparent focus:border-slate-300 pb-0.5 placeholder:text-slate-300"
+          />
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Rules (all apply)</p>
-        {form.rules.map(r => (
-          <RuleRow key={r.id} rule={r} onChange={u => updateRule(r.id, u)} onDelete={() => removeRule(r.id)}/>
-        ))}
-        <button onClick={addRule} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 mt-1">
-          <Plus size={12}/> Add rule
-        </button>
-      </CardContent>
-    </Card>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Rules (all apply)</p>
+          {form.rules.map(r => (
+              <RuleRow key={r.id} rule={r} onChange={u => updateRule(r.id, u)} onDelete={() => removeRule(r.id)}/>
+          ))}
+          <button onClick={addRule} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 mt-1">
+            <Plus size={12}/> Add rule
+          </button>
+          {saveErr && (
+              <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                <X size={11}/> {saveErr}
+              </p>
+          )}
+        </CardContent>
+      </Card>
   );
 }
 
@@ -235,55 +261,55 @@ export default function PolicyBuilder({ keycloak }) {
   }
 
   return (
-    <Page title="Policy Builder" subtitle="Define rules that govern intent execution"
-      action={
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setShowTemplates(true)}>
-            <BookOpen size={14}/> Templates
-          </Button>
-          <Button onClick={handleAdd}><Plus size={14}/> New policy</Button>
-        </div>
-      }>
-
-      {/* Template library info banner — shown when empty */}
-      {!loading && policies.length === 0 && (
-        <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3">
-          <BookOpen size={16} className="text-blue-600 shrink-0 mt-0.5"/>
-          <div className="flex-1">
-            <p className="text-sm font-medium text-blue-800">Start from a template</p>
-            <p className="text-xs text-blue-700 mt-0.5">
-              Pick from industry-specific policy templates for Healthcare, Financial Services, Cost Control, and more —
-              or build from scratch with the Policy Builder.
-            </p>
-          </div>
-          <Button size="sm" onClick={() => setShowTemplates(true)}>Browse templates</Button>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="flex justify-center py-16"><Spinner className="w-8 h-8"/></div>
-      ) : policies.length === 0 ? (
-        <Card>
-          <EmptyState icon={<ShieldCheck size={22}/>} title="No policies"
-            description="Create a policy to enforce cost, latency, and risk rules on every execution"
+      <Page title="Policy Builder" subtitle="Define rules that govern intent execution"
             action={
-              <div className="flex gap-2 justify-center">
-                <Button variant="secondary" onClick={() => setShowTemplates(true)}><BookOpen size={14}/> Browse templates</Button>
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={() => setShowTemplates(true)}>
+                  <BookOpen size={14}/> Templates
+                </Button>
                 <Button onClick={handleAdd}><Plus size={14}/> New policy</Button>
               </div>
-            }/>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {policies.map((p, i) => (
-            <PolicyCard key={p.policyId ?? i} policy={p} onSave={handleSave} onDelete={handleDelete}/>
-          ))}
-        </div>
-      )}
+            }>
 
-      {showTemplates && (
-        <TemplateLibrary onSelect={handleTemplateSelect} onClose={() => setShowTemplates(false)}/>
-      )}
-    </Page>
+        {/* Template library info banner — shown when empty */}
+        {!loading && policies.length === 0 && (
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3">
+              <BookOpen size={16} className="text-blue-600 shrink-0 mt-0.5"/>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-800">Start from a template</p>
+                <p className="text-xs text-blue-700 mt-0.5">
+                  Pick from industry-specific policy templates for Healthcare, Financial Services, Cost Control, and more —
+                  or build from scratch with the Policy Builder.
+                </p>
+              </div>
+              <Button size="sm" onClick={() => setShowTemplates(true)}>Browse templates</Button>
+            </div>
+        )}
+
+        {loading ? (
+            <div className="flex justify-center py-16"><Spinner className="w-8 h-8"/></div>
+        ) : policies.length === 0 ? (
+            <Card>
+              <EmptyState icon={<ShieldCheck size={22}/>} title="No policies"
+                          description="Create a policy to enforce cost, latency, and risk rules on every execution"
+                          action={
+                            <div className="flex gap-2 justify-center">
+                              <Button variant="secondary" onClick={() => setShowTemplates(true)}><BookOpen size={14}/> Browse templates</Button>
+                              <Button onClick={handleAdd}><Plus size={14}/> New policy</Button>
+                            </div>
+                          }/>
+            </Card>
+        ) : (
+            <div className="space-y-4">
+              {policies.map((p, i) => (
+                  <PolicyCard key={p.policyId ?? i} policy={p} onSave={handleSave} onDelete={handleDelete}/>
+              ))}
+            </div>
+        )}
+
+        {showTemplates && (
+            <TemplateLibrary onSelect={handleTemplateSelect} onClose={() => setShowTemplates(false)}/>
+        )}
+      </Page>
   );
 }

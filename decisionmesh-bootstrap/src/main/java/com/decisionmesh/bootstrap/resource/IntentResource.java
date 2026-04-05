@@ -1,23 +1,25 @@
 package com.decisionmesh.bootstrap.resource;
 
 import com.decisionmesh.application.service.ControlPlaneOrchestrator;
+import com.decisionmesh.bootstrap.service.IntentService;
 import com.decisionmesh.bootstrap.dto.IntentEventDto;
-import com.decisionmesh.bootstrap.dto.IntentPageResponse;
-import com.decisionmesh.bootstrap.dto.IntentSummaryDto;
+import com.decisionmesh.bootstrap.dto.IntentResponse;
 import com.decisionmesh.contracts.security.entity.AuthenticatedIdentity;
 import com.decisionmesh.domain.intent.Intent;
-import com.decisionmesh.persistence.repository.IntentEventRepository;
-import com.decisionmesh.persistence.repository.IntentRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.decisionmesh.persistence.entity.IntentEntity;
+
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
+import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.quarkus.logging.Log;
 import io.quarkus.security.Authenticated;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.common.annotation.NonBlocking;
 import io.smallrye.mutiny.Uni;
+
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
+import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.MediaType;
 
 import java.util.List;
@@ -30,11 +32,11 @@ public class IntentResource {
 
     @Inject SecurityIdentity         securityIdentity;
     @Inject ControlPlaneOrchestrator orchestrator;
-    @Inject IntentRepository         intentRepository;
-    @Inject ObjectMapper             mapper;
-    @Inject IntentEventRepository intentEventRepository;
+    @Inject IntentService            intentService;
 
-    // ── Identity helper ───────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Identity
+    // ─────────────────────────────────────────────────────────────
 
     @GET
     @Path("/auth/me")
@@ -43,14 +45,24 @@ public class IntentResource {
         return securityIdentity.getCredential(AuthenticatedIdentity.class);
     }
 
-    // ── Submit intent ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Submit Intent
+    //
+    // Returns UUID immediately after CREATED is persisted.
+    // Remaining pipeline runs asynchronously in the background.
+    //
+    // @WithSession required: intentRepository.save() inside the
+    // orchestrator's sync Phase 1 chain needs a Hibernate Reactive
+    // session bound to the Vert.x duplicated context. Without it:
+    //   "No current Quarkus vertx context found"
+    // ─────────────────────────────────────────────────────────────
 
     @POST
     @NonBlocking
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
+    @WithSession
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<UUID> submit(Intent intent,
                             @HeaderParam("Idempotency-Key") String idempotencyKey) {
-
         if (intent == null)
             throw new BadRequestException("Intent body required");
         if (idempotencyKey == null || idempotencyKey.isBlank())
@@ -60,92 +72,104 @@ public class IntentResource {
         intent.setTenantId(auth.tenantId());
         intent.setUserId(auth.userId());
 
-        Log.infof("Intent submission: id=%s tenant=%s type=%s idempotency=%s thread=%s",
-                intent.getId(), auth.tenantId(), intent.getIntentType(),
-                idempotencyKey, Thread.currentThread().getName());
+        Log.infof("Intent submission: id=%s tenant=%s type=%s",
+                intent.getId(), auth.tenantId(), intent.getIntentType());
 
         return orchestrator.submit(intent, auth.tenantId(), idempotencyKey, intent.getIntentType());
     }
 
-    // ── Get single intent ─────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Get Single Intent
+    // ─────────────────────────────────────────────────────────────
 
     @GET
     @Path("/{intentId}")
+    @WithSession
     @NonBlocking
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
-    public Uni<Intent> get(@PathParam("intentId") UUID intentId) {
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
+    public Uni<IntentEntity> get(@PathParam("intentId") UUID intentId) {
         AuthenticatedIdentity auth = resolveIdentity();
-        return orchestrator.getById(auth.tenantId(), intentId)
-                .onItem().ifNull().failWith(new NotFoundException("Intent not found: " + intentId));
+        return intentService.getIntent(auth.tenantId(), intentId)
+                .onItem().ifNull().failWith(
+                        new NotFoundException("Intent not found: " + intentId));
     }
 
-    // ── List intents — paginated ───────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Get Intent Events
     //
-    // Used by:
-    //   Dashboard.jsx  — size=8, sort=createdAt,desc
-    //   IntentsTable   — size=20, phase filter, sort controls
-    //
-    // Response: { content:[...], totalElements:N, totalPages:N, size:N, number:N }
-    // Each item: id, intentType, phase, satisfactionState, budget{spentUsd}, createdAt, version
+    // BUG FIX: dropped when service layer was introduced.
+    // ExecutionTimeline.jsx polls this every 5s:
+    //   GET /api/intents/{id}/events  →  List<IntentEventDto>
+    // Without it every poll returned 404, the timeline had no events
+    // to render, and the UI showed CREATED/In progress permanently —
+    // even after the pipeline reached SATISFIED in the database.
+    // ─────────────────────────────────────────────────────────────
+
+    @GET
+    @Path("/{intentId}/events")
+    @WithSession
+    @NonBlocking
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
+    public Uni<List<IntentEventDto>> getEvents(@PathParam("intentId") UUID intentId) {
+        AuthenticatedIdentity auth = resolveIdentity();
+        return intentService.getIntentEvents(auth.tenantId(), intentId);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // List Intents (Paginated)
+    // ─────────────────────────────────────────────────────────────
 
     @GET
     @WithSession
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
-    public Uni<IntentPageResponse> list(
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
+    public Uni<IntentResponse> list(
             @QueryParam("page")  @DefaultValue("0")              int    page,
             @QueryParam("size")  @DefaultValue("20")             int    size,
             @QueryParam("sort")  @DefaultValue("createdAt,desc") String sort,
             @QueryParam("phase")                                 String phase) {
 
-        AuthenticatedIdentity auth     = resolveIdentity();
-        UUID                  tenantId = auth.tenantId();
-
-        String[] parts     = sort.split(",", 2);
-        String   sortField = parts[0].trim();
-        String   sortDir   = parts.length > 1 ? parts[1].trim() : "desc";
-
-        int    clampedSize  = Math.min(Math.max(size, 1), 100);
-        String phaseFilter  = (phase != null && !phase.isBlank()) ? phase.toUpperCase() : null;
-
-        Uni<Long> countUni = phaseFilter != null
-                ? intentRepository.countByTenantAndPhase(tenantId, phaseFilter)
-                : intentRepository.countByTenant(tenantId);
-
-        Uni<List<com.decisionmesh.persistence.entity.IntentEntity>> listUni =
-                intentRepository.findPageByTenant(tenantId, phaseFilter, sortField, sortDir, page, clampedSize);
-
-        return Uni.combine().all().unis(countUni, listUni).asTuple()
-                .map(tuple -> {
-                    long total      = tuple.getItem1();
-                    var  entities   = tuple.getItem2();
-                    int  totalPages = (int) Math.ceil((double) total / clampedSize);
-
-                    var content = entities.stream()
-                            .map(e -> IntentSummaryDto.from(e, mapper))
-                            .toList();
-
-                    return new IntentPageResponse(content, total, totalPages, clampedSize, page);
-                });
-    }
-
-    @GET
-    @Path("/{intentId}/events")
-    @WithSession
-    @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
-    public Uni<List<IntentEventDto>> getEvents(@PathParam("intentId") UUID intentId) {
         AuthenticatedIdentity auth = resolveIdentity();
-        return intentEventRepository.findByTenantAndIntent(auth.tenantId(), intentId)
-                .map(events -> events.stream()
-                        .map(IntentEventDto::from)
-                        .toList());
+
+        String[] parts   = sort.split(",", 2);
+        String sortField = parts[0].trim();
+        String sortDir   = parts.length > 1 ? parts[1].trim() : "desc";
+
+        int clampedSize = Math.min(Math.max(size, 1), 100);
+        String phaseFilter = (phase != null && !phase.isBlank()) ? phase.toUpperCase() : null;
+
+        return intentService.getIntents(
+                auth.tenantId(), phaseFilter, sortField, sortDir, page, clampedSize);
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Delete Intent
+    // ─────────────────────────────────────────────────────────────
+
+    @DELETE
+    @Path("/{intentId}")
+    @WithTransaction
+    @NonBlocking
+    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
+    public Uni<Response> delete(@PathParam("intentId") UUID intentId) {
+        AuthenticatedIdentity auth = resolveIdentity();
+        return intentService.deleteIntent(auth.tenantId(), intentId)
+                .map(deleted -> deleted
+                        ? Response.noContent().build()
+                        : Response.status(Response.Status.NOT_FOUND).build())
+                .onFailure().recoverWithItem(ex -> Response.serverError().build());
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────
 
     private AuthenticatedIdentity resolveIdentity() {
-        AuthenticatedIdentity auth = securityIdentity.getCredential(AuthenticatedIdentity.class);
-        if (auth == null)
-            throw new NotAuthorizedException("Identity not resolved — check IdentityAugmentor");
+        AuthenticatedIdentity auth =
+                securityIdentity.getCredential(AuthenticatedIdentity.class);
+        if (auth == null) {
+            throw new NotAuthorizedException(
+                    "Identity not resolved — check IdentityAugmentor");
+        }
         return auth;
     }
 }

@@ -7,6 +7,7 @@ import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.jboss.logging.Logger;
 
 import java.util.UUID;
@@ -59,7 +60,8 @@ public class SignupService {
     // ── Public API ────────────────────────────────────────────────────────────
 
     public Uni<SignupResponse> onboard(SignupRequest request) {
-        String externalUserId = identity.getPrincipal().getName();
+        JsonWebToken jwt = (JsonWebToken) identity.getPrincipal();
+        String externalUserId = jwt.getSubject();
         String email          = identity.getAttribute("email");
         String name           = identity.getAttribute("name");
 

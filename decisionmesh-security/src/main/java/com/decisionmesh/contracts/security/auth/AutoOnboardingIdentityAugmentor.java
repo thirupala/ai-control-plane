@@ -13,6 +13,7 @@ import io.quarkus.security.runtime.QuarkusSecurityIdentity;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.jboss.logging.Logger;
 
 import java.util.Set;
@@ -41,19 +42,19 @@ public class AutoOnboardingIdentityAugmentor implements SecurityIdentityAugmento
         if (identity.isAnonymous()) {
             return Uni.createFrom().item(identity);
         }
-
-        String externalId = identity.getPrincipal().getName();
+        JsonWebToken jwt = (JsonWebToken) identity.getPrincipal();
+        String keycloak_sub = jwt.getSubject();
         String email      = extractClaim(identity, "email");
         String name       = extractClaim(identity, "name");
 
         // Step 1 — find or create user
-        return userService.findByExternalUserId(externalId)
+        return userService.findByExternalUserId(keycloak_sub)
                 .flatMap((UserEntity existing) -> {
                     if (existing != null) {
                         return Uni.createFrom().item(existing);
                     }
                     LOG.infof("First login — creating user: %s", email);
-                    return userService.createExternalUser(externalId, email, name);
+                    return userService.createExternalUser(keycloak_sub, email, name);
                 })
 
                 // Step 2 — find or auto-provision tenant

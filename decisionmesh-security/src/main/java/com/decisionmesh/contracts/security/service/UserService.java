@@ -5,6 +5,8 @@ import io.quarkus.hibernate.reactive.panache.Panache;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.util.UUID;
+
 @ApplicationScoped
 public class UserService {
 
@@ -12,14 +14,13 @@ public class UserService {
      * Creates a new external user (e.g. from Keycloak OIDC sub claim).
      * Timestamps are managed by @CreationTimestamp / @UpdateTimestamp on the entity.
      */
-    public Uni<UserEntity> createExternalUser(
-            String externalUserId,
-            String email,
-            String name) {
+    public Uni<UserEntity> createExternalUser(String keycloak_sub,
+                                              String email,
+                                              String name) {
 
         return Panache.withTransaction(() -> {
             UserEntity user     = new UserEntity();
-            user.externalUserId = externalUserId;
+            user.externalUserId = keycloak_sub;
             user.email          = email;
             user.name           = name;
             user.isActive       = true;

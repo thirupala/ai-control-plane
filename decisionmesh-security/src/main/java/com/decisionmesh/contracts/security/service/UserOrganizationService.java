@@ -17,7 +17,7 @@ public class UserOrganizationService {
     private static final Logger LOG = Logger.getLogger(UserOrganizationService.class);
 
     @Inject
-    UserOrganizationRepository repository;
+    public UserOrganizationRepository repository;
 
     /**
      * Creates a membership with no permissions — delegates to the full overload.
@@ -97,4 +97,5 @@ public class UserOrganizationService {
                         })
         );
     }
+
 }
