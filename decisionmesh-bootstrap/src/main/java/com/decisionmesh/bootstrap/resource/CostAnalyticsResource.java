@@ -1,14 +1,13 @@
 package com.decisionmesh.bootstrap.resource;
 
-import com.decisionmesh.contracts.security.entity.AuthenticatedIdentity;
 import io.quarkus.logging.Log;
-import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.common.annotation.NonBlocking;
 import io.smallrye.mutiny.Uni;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.hibernate.reactive.mutiny.Mutiny;
 
 import java.math.BigDecimal;
@@ -20,7 +19,7 @@ import java.util.*;
  *
  * GET /api/analytics/cost → { totalCostUsd, avgCostPerIntent, costOverTime[], costByAdapter[] }
  *
- * Key fixes vs previous version:
+ * Key notes:
  *  1. UUID tenantId passed as String to setParameter() — Hibernate Reactive native
  *     queries cannot resolve JDBC type for UUID directly; passing UUID.toString()
  *     avoids a silent type-binding failure that caused all queries to return 0/empty.
@@ -32,69 +31,70 @@ import java.util.*;
 @RolesAllowed({"sys_admin", "tenant_admin", "tenant_user"})
 public class CostAnalyticsResource {
 
-    @Inject SecurityIdentity securityIdentity;
+    @Inject JsonWebToken          jwt;
     @Inject Mutiny.SessionFactory sf;
 
     @GET
     @Path("/cost")
     @NonBlocking
     public Uni<Map<String, Object>> getCostAnalytics() {
-        UUID tenantId = resolveIdentity().tenantId();
-        // Pass as String — HR native queries cannot bind UUID type directly
-        String tid = tenantId.toString();
+        String tid = tenantIdStr();
 
         // ── 1. Total cost ─────────────────────────────────────────────────────
         Uni<Object> totalUni = sf.withSession(s ->
-                s.createNativeQuery(
-                                "SELECT COALESCE(SUM(cost_usd), 0) " +
-                                        "FROM execution_records WHERE tenant_id = CAST(:tid AS uuid)")
-                        .setParameter("tid", tid)
-                        .getSingleResult()
-        ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] totalUni failed")).onFailure().recoverWithItem(0);
+                        s.createNativeQuery(
+                                        "SELECT COALESCE(SUM(cost_usd), 0) " +
+                                                "FROM execution_records WHERE tenant_id = CAST(:tid AS uuid)")
+                                .setParameter("tid", tid)
+                                .getSingleResult()
+                ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] totalUni failed"))
+                .onFailure().recoverWithItem(0);
 
         // ── 2. Avg cost per intent ────────────────────────────────────────────
         Uni<Object> avgUni = sf.withSession(s ->
-                s.createNativeQuery(
-                                "SELECT COALESCE(AVG(intent_total), 0) FROM " +
-                                        "  (SELECT SUM(cost_usd) AS intent_total " +
-                                        "   FROM execution_records WHERE tenant_id = CAST(:tid AS uuid) " +
-                                        "   GROUP BY intent_id) sub")
-                        .setParameter("tid", tid)
-                        .getSingleResult()
-        ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] avgUni failed")).onFailure().recoverWithItem(0);
+                        s.createNativeQuery(
+                                        "SELECT COALESCE(AVG(intent_total), 0) FROM " +
+                                                "  (SELECT SUM(cost_usd) AS intent_total " +
+                                                "   FROM execution_records WHERE tenant_id = CAST(:tid AS uuid) " +
+                                                "   GROUP BY intent_id) sub")
+                                .setParameter("tid", tid)
+                                .getSingleResult()
+                ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] avgUni failed"))
+                .onFailure().recoverWithItem(0);
 
         // ── 3. Cost over time — daily ─────────────────────────────────────────
         Uni<List<Object>> timeUni = sf.withSession(s ->
-                s.createNativeQuery(
-                                "SELECT TO_CHAR(DATE_TRUNC('day', executed_at), 'Mon DD') AS lbl, " +
-                                        "       SUM(cost_usd) AS total " +
-                                        "FROM execution_records " +
-                                        "WHERE tenant_id = CAST(:tid AS uuid) AND cost_usd IS NOT NULL " +
-                                        "GROUP BY DATE_TRUNC('day', executed_at) " +
-                                        "ORDER BY DATE_TRUNC('day', executed_at) ASC")
-                        .setParameter("tid", tid)
-                        .getResultList()
-        ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] timeUni failed")).onFailure().recoverWithItem(Collections.emptyList());
+                        s.createNativeQuery(
+                                        "SELECT TO_CHAR(DATE_TRUNC('day', executed_at), 'Mon DD') AS lbl, " +
+                                                "       SUM(cost_usd) AS total " +
+                                                "FROM execution_records " +
+                                                "WHERE tenant_id = CAST(:tid AS uuid) AND cost_usd IS NOT NULL " +
+                                                "GROUP BY DATE_TRUNC('day', executed_at) " +
+                                                "ORDER BY DATE_TRUNC('day', executed_at) ASC")
+                                .setParameter("tid", tid)
+                                .getResultList()
+                ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] timeUni failed"))
+                .onFailure().recoverWithItem(Collections.emptyList());
 
         // ── 4. Cost by adapter ────────────────────────────────────────────────
         Uni<List<Object>> adapterUni = sf.withSession(s ->
-                s.createNativeQuery(
-                                "SELECT a.name, COALESCE(SUM(e.cost_usd), 0) AS total " +
-                                        "FROM execution_records e " +
-                                        "JOIN adapters a ON e.adapter_id = a.id " +
-                                        "WHERE e.tenant_id = CAST(:tid AS uuid) " +
-                                        "GROUP BY a.id, a.name " +
-                                        "ORDER BY total DESC")
-                        .setParameter("tid", tid)
-                        .getResultList()
-        ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] adapterUni failed")).onFailure().recoverWithItem(Collections.emptyList());
+                        s.createNativeQuery(
+                                        "SELECT a.name, COALESCE(SUM(e.cost_usd), 0) AS total " +
+                                                "FROM execution_records e " +
+                                                "JOIN adapters a ON e.adapter_id = a.id " +
+                                                "WHERE e.tenant_id = CAST(:tid AS uuid) " +
+                                                "GROUP BY a.id, a.name " +
+                                                "ORDER BY total DESC")
+                                .setParameter("tid", tid)
+                                .getResultList()
+                ).onFailure().invoke(ex -> Log.warnf(ex, "[Cost] adapterUni failed"))
+                .onFailure().recoverWithItem(Collections.emptyList());
 
         return Uni.combine().all()
                 .unis(totalUni, avgUni, timeUni, adapterUni)
                 .asTuple()
-                .map(t -> buildResponse(t.getItem1(), t.getItem2(),
-                        t.getItem3(), t.getItem4()))
-                .onFailure().invoke(ex -> Log.warnf(ex, "[Cost] combine failed tenant=%s", tenantId))
+                .map(t -> buildResponse(t.getItem1(), t.getItem2(), t.getItem3(), t.getItem4()))
+                .onFailure().invoke(ex -> Log.warnf(ex, "[Cost] combine failed tenant=%s", tid))
                 .onFailure().recoverWithItem(emptyResponse());
     }
 
@@ -134,11 +134,24 @@ public class CostAnalyticsResource {
     }
 
     private Map<String, Object> emptyResponse() {
-        return Map.of("totalCostUsd", 0.0, "avgCostPerIntent", 0.0,
-                "costOverTime", List.of(), "costByAdapter", List.of());
+        return Map.of(
+                "totalCostUsd",     0.0,
+                "avgCostPerIntent", 0.0,
+                "costOverTime",     List.of(),
+                "costByAdapter",    List.of()
+        );
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private String tenantIdStr() {
+        String tid = jwt.getClaim("tenantId");
+        if (tid == null || tid.isBlank()) throw new ForbiddenException("Missing tenantId in token");
+        // Validate format before passing to SQL
+        try { UUID.fromString(tid); }
+        catch (IllegalArgumentException e) { throw new BadRequestException("Invalid tenantId format"); }
+        return tid;
+    }
 
     private Object[] toArray(Object row) {
         if (row instanceof Object[] arr) return arr;
@@ -154,12 +167,5 @@ public class CostAnalyticsResource {
 
     private double round(double val) {
         return BigDecimal.valueOf(val).setScale(6, RoundingMode.HALF_UP).doubleValue();
-    }
-
-    private AuthenticatedIdentity resolveIdentity() {
-        AuthenticatedIdentity auth =
-                securityIdentity.getCredential(AuthenticatedIdentity.class);
-        if (auth == null) throw new NotAuthorizedException("Identity not resolved");
-        return auth;
     }
 }

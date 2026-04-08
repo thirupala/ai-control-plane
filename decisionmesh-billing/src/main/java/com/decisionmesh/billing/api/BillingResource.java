@@ -34,7 +34,7 @@ public class BillingResource {
         if (request.priceId == null || request.priceId.isBlank())
             return Response.status(400).entity(Map.of("error", "priceId is required")).build();
 
-        String orgId = tenantContext.tenantId().toString();
+        String orgId = tenantContext.getTenantId().toString();
 
         try {
             String url;

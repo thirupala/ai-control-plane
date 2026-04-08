@@ -1,44 +1,40 @@
 package com.decisionmesh.contracts.security.context;
 
+import io.quarkus.security.ForbiddenException;
+import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.RequestScoped;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 
 import java.util.UUID;
 
-/**
- * Request-scoped context holding tenant, user, and API key information.
- * Set by authentication filters and used throughout the request lifecycle.
- */
 @RequestScoped
 public class TenantContext {
-
     private UUID tenantId;
-    private String apiKeyId;
     private UUID userId;
     private String authType;
+    private boolean apiKeyId;
+    private String role;
 
-    public UUID tenantId() {
-        if (tenantId == null) {
-            throw new WebApplicationException("Tenant not resolved", 401);
-        }
+    public UUID getTenantId() {
         return tenantId;
     }
 
-    public UUID userId() {
+    public UUID getUserId() {
         return userId;
     }
 
     public boolean isApiKey() {
-        return apiKeyId != null;
+        return apiKeyId ;
     }
 
-    public void set(UUID tenantId, String apiKeyId, UUID userId, String authType) {
-        if (this.tenantId != null) {
-            throw new IllegalStateException("TenantContext already set");
-        }
+
+    public void setUserContext(UUID tenantId, UUID userId, String role) {
+        if (this.tenantId != null) return;
         this.tenantId = tenantId;
-        this.apiKeyId = apiKeyId;
         this.userId = userId;
-        this.authType = authType;
+        this.role = role;
+        this.authType = "JWT";
     }
 }

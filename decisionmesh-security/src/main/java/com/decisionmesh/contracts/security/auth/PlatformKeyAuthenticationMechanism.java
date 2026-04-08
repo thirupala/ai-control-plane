@@ -26,9 +26,9 @@ import java.util.Set;
  * TenantContext is set by TenantContextFilter AFTER authentication.
  */
 @ApplicationScoped
-public class ApiKeyAuthenticationMechanism implements HttpAuthenticationMechanism {
+public class PlatformKeyAuthenticationMechanism implements HttpAuthenticationMechanism {
 
-    private static final Logger LOG = Logger.getLogger(ApiKeyAuthenticationMechanism.class);
+    private static final Logger LOG = Logger.getLogger(PlatformKeyAuthenticationMechanism.class);
     private static final String AUTHORIZATION_HEADER  = "Authorization";
     private static final String BEARER_PREFIX         = "Bearer ";
     private static final String API_KEY_PREFIX_LIVE   = "sk_live_";

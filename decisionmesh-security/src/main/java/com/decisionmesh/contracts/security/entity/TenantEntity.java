@@ -80,4 +80,19 @@ public class TenantEntity extends PanacheEntityBase {
     public static Uni<TenantEntity> findByName(String name) {
         return find("name", name).firstResult();
     }
+
+    public static Uni<TenantEntity> upsert(TenantEntity tenant) {
+        return getSession().chain(session ->
+                session.createNativeQuery(
+                                "INSERT INTO tenants (id, external_id, name, status, created_at, updated_at) " +
+                                        "VALUES (:id, :externalId, :name, :status, NOW(), NOW()) " +
+                                        "ON CONFLICT (external_id) DO NOTHING " +
+                                        "RETURNING id", TenantEntity.class)
+                        .setParameter("id",         UUID.randomUUID())
+                        .setParameter("externalId", tenant.externalId)
+                        .setParameter("name",       tenant.name)
+                        .setParameter("status",     tenant.status)
+                        .getSingleResultOrNull()
+        );
+    }
 }

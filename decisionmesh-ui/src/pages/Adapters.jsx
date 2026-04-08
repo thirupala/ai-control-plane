@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import Page from '../components/shared/Page';
 import { Card, Button, EmptyState, Spinner, cn } from '../components/shared';
-import { listAdapters, toggleAdapter, createAdapter, updateAdapter, getAdapterPerformance } from '../utils/api';
+import { listAdapters, toggleAdapter, createAdapter, updateAdapter, getAdapterPerformance, ApiError } from '../utils/api';
 import { formatDate, formatRelative } from '../lib/utils';
 
 // ─── Provider catalogue ────────────────────────────────────────────────────────
@@ -143,64 +143,6 @@ const INTENT_TYPES  = ['SUMMARIZATION', 'CHAT', 'CLASSIFICATION', 'CUSTOM'];
 // ─── Circuit breaker threshold — mirrors llm.selector.circuit-breaker-threshold ─
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 
-
-// ─── Quick-add presets ────────────────────────────────────────────────────────
-const QUICK_ADD_PRESETS = [
-  // Anthropic
-  { id: 'claude-sonnet', provider: 'ANTHROPIC', label: 'Claude 3.5 Sonnet', badge: 'Recommended', badgeColor: '#16a34a',
-    description: 'Best balance of intelligence and speed. Most popular Claude model.',
-    formDefaults: { name: 'Claude 3.5 Sonnet', modelId: 'claude-3-5-sonnet-20241022',
-      config: { model: 'claude-3-5-sonnet-20241022', max_tokens: 1024, timeout_ms: 30000 } } },
-  { id: 'claude-haiku', provider: 'ANTHROPIC', label: 'Claude 3.5 Haiku', badge: 'Fast & cheap', badgeColor: '#2563eb',
-    description: 'Fastest Claude model. Ideal for high-volume, latency-sensitive workloads.',
-    formDefaults: { name: 'Claude 3.5 Haiku', modelId: 'claude-3-5-haiku-20241022',
-      config: { model: 'claude-3-5-haiku-20241022', max_tokens: 1024, timeout_ms: 30000 } } },
-  { id: 'claude-opus', provider: 'ANTHROPIC', label: 'Claude 3 Opus', badge: 'Most powerful', badgeColor: '#7c3aed',
-    description: 'Highest capability. Best for complex reasoning and nuanced analysis.',
-    formDefaults: { name: 'Claude 3 Opus', modelId: 'claude-3-opus-20240229',
-      config: { model: 'claude-3-opus-20240229', max_tokens: 1024, timeout_ms: 30000 } } },
-  // Gemini
-  { id: 'gemini-flash', provider: 'GEMINI', label: 'Gemini 2.0 Flash', badge: 'Default', badgeColor: '#16a34a',
-    description: "Fast, multimodal, and cost-efficient. Google's latest flash model.",
-    formDefaults: { name: 'Gemini 2.0 Flash', modelId: 'gemini-2.0-flash',
-      config: { model: 'gemini-2.0-flash', max_tokens: 1024, temperature: 0.2, timeout_ms: 30000 } } },
-  { id: 'gemini-pro', provider: 'GEMINI', label: 'Gemini 1.5 Pro', badge: 'Long context', badgeColor: '#7c3aed',
-    description: '1M token context window. Best for document analysis.',
-    formDefaults: { name: 'Gemini 1.5 Pro', modelId: 'gemini-1.5-pro',
-      config: { model: 'gemini-1.5-pro', max_tokens: 1024, temperature: 0.2, timeout_ms: 30000 } } },
-  { id: 'gemini-flash-15', provider: 'GEMINI', label: 'Gemini 1.5 Flash', badge: 'Budget', badgeColor: '#d97706',
-    description: 'Extremely low cost. Great for classification and simple tasks.',
-    formDefaults: { name: 'Gemini 1.5 Flash', modelId: 'gemini-1.5-flash',
-      config: { model: 'gemini-1.5-flash', max_tokens: 1024, temperature: 0.2, timeout_ms: 30000 } } },
-  // Azure — resource_name and deployment_name left blank for user to fill
-  { id: 'azure-gpt4o', provider: 'AZURE_OPENAI', label: 'Azure GPT-4o', badge: 'Enterprise', badgeColor: '#0078d4',
-    description: 'GPT-4o via your Azure subscription. Data stays in your Azure region.',
-    formDefaults: { name: 'Azure GPT-4o', modelId: 'gpt-4o',
-      config: { resource_name: '', deployment_name: 'gpt-4o', api_version: '2024-12-01-preview', model: 'gpt-4o', max_tokens: 1024, temperature: 0.2, timeout_ms: 30000 } } },
-  { id: 'azure-gpt4o-mini', provider: 'AZURE_OPENAI', label: 'Azure GPT-4o Mini', badge: 'Cost efficient', badgeColor: '#16a34a',
-    description: 'Lightweight GPT-4o via Azure. Ideal for high-volume workloads.',
-    formDefaults: { name: 'Azure GPT-4o Mini', modelId: 'gpt-4o-mini',
-      config: { resource_name: '', deployment_name: 'gpt-4o-mini', api_version: '2024-12-01-preview', model: 'gpt-4o-mini', max_tokens: 1024, temperature: 0.2, timeout_ms: 30000 } } },
-  { id: 'azure-o3-mini', provider: 'AZURE_OPENAI', label: 'Azure o3-mini', badge: 'Reasoning', badgeColor: '#7c3aed',
-    description: "Microsoft's reasoning model via Azure. Strong at coding and STEM.",
-    formDefaults: { name: 'Azure o3-mini', modelId: 'o3-mini',
-      config: { resource_name: '', deployment_name: 'o3-mini', api_version: '2024-12-01-preview', model: 'o3-mini', max_tokens: 1024, temperature: 0.2, timeout_ms: 60000 } } },
-  // DeepSeek — region blank (single global endpoint, no regional variants)
-  { id: 'deepseek-chat', provider: 'DEEPSEEK', label: 'DeepSeek V3', badge: 'Ultra cheap', badgeColor: '#16a34a',
-    description: 'State-of-the-art at a fraction of the cost. OpenAI-compatible API.',
-    formDefaults: { name: 'DeepSeek V3', modelId: 'deepseek-chat',
-      config: { model: 'deepseek-chat', max_tokens: 2048, temperature: 0.0, timeout_ms: 60000 } } },
-  { id: 'deepseek-reasoner', provider: 'DEEPSEEK', label: 'DeepSeek R1', badge: 'Reasoning', badgeColor: '#7c3aed',
-    description: 'Chain-of-thought reasoning. Returns <thinking> trace + final answer.',
-    formDefaults: { name: 'DeepSeek R1', modelId: 'deepseek-reasoner',
-      config: { model: 'deepseek-reasoner', max_tokens: 2048, temperature: 0.0, timeout_ms: 60000 } } },
-];
-
-const PRESETS_BY_PROVIDER = QUICK_ADD_PRESETS.reduce((acc, p) => {
-  (acc[p.provider] ??= []).push(p);
-  return acc;
-}, {});
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function providerMeta(provider) {
@@ -304,66 +246,6 @@ function PerformancePanel({ perf }) {
           </span>
           )}
         </p>
-      </div>
-  );
-}
-
-
-// ─── Quick-add section ────────────────────────────────────────────────────────
-
-function QuickAddSection({ onSelect, collapsed, onToggle }) {
-  return (
-      <div className="rounded-xl border border-slate-200 overflow-hidden">
-        <button
-            onClick={onToggle}
-            className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
-        >
-          <div className="flex items-center gap-2">
-            <Zap size={14} className="text-blue-600" />
-            <span className="text-sm font-semibold text-slate-700">Quick add</span>
-            <span className="text-xs text-slate-400">— pick a preset to open the modal pre-filled</span>
-          </div>
-          <span className="text-slate-400 text-xs">{collapsed ? '▼ Show' : '▲ Hide'}</span>
-        </button>
-        {!collapsed && (
-            <div className="p-4 space-y-5 bg-white">
-              {Object.entries(PRESETS_BY_PROVIDER).map(([provider, presets]) => {
-                const meta = providerMeta(provider);
-                return (
-                    <div key={provider}>
-                      <div className="flex items-center gap-2 mb-2.5">
-                  <span className="text-[11px] font-bold px-2 py-0.5 rounded"
-                        style={{ backgroundColor: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }}>
-                    {meta.label}
-                  </span>
-                        <span className="text-[10px] text-slate-400">{meta.authNote}</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
-                        {presets.map(preset => (
-                            <button key={preset.id} onClick={() => onSelect(preset)}
-                                    className="text-left p-3 rounded-lg border border-slate-200 hover:border-blue-300 hover:shadow-sm transition-all group">
-                              <div className="flex items-start justify-between mb-1.5">
-                        <span className="text-xs font-semibold text-slate-800 group-hover:text-blue-700 transition-colors">
-                          {preset.label}
-                        </span>
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ml-2"
-                                      style={{ backgroundColor: preset.badgeColor + '18', color: preset.badgeColor }}>
-                          {preset.badge}
-                        </span>
-                              </div>
-                              <p className="text-[10px] text-slate-500 leading-relaxed">{preset.description}</p>
-                              <p className="text-[10px] font-mono text-slate-400 mt-1.5"
-                                 style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                                {preset.formDefaults.modelId}
-                              </p>
-                            </button>
-                        ))}
-                      </div>
-                    </div>
-                );
-              })}
-            </div>
-        )}
       </div>
   );
 }
@@ -483,31 +365,16 @@ const DEFAULT_FORM = {
 };
 
 function AdapterModal({ adapter, onSave, onClose }) {
-  // _isPreset objects are pre-filled NEW adapters, not edits
-  const isEdit = !!adapter && !adapter._isPreset;
+  const isEdit = !!adapter;
   const [form, setForm] = useState(() => {
     if (!adapter) return DEFAULT_FORM;
-    // Preset: pre-filled new adapter — config is already a JSON string
-    if (adapter._isPreset) {
-      return {
-        ...DEFAULT_FORM,
-        name:               adapter.name,
-        provider:           adapter.provider,
-        modelId:            adapter.modelId,
-        adapterType:        'LLM',
-        region:             '',
-        allowedIntentTypes: [],
-        config:             adapter.config,
-        capabilityFlags:    '{}',
-        isActive:           true,
-      };
-    }
-    // Edit: existing adapter from server
     return {
       ...adapter,
       allowedIntentTypes: Array.isArray(adapter.allowedIntentTypes)
           ? adapter.allowedIntentTypes
           : [],
+      // capabilityFlags comes through via ...adapter spread.
+      // Normalise here in case the server returns null (nullable=false but old data).
       capabilityFlags: (adapter.capabilityFlags && typeof adapter.capabilityFlags === 'object')
           ? adapter.capabilityFlags
           : {},
@@ -596,6 +463,13 @@ function AdapterModal({ adapter, onSave, onClose }) {
       });
 
       onClose();
+    } catch (e) {
+      // Show the error inline in the modal — keep it open so the user can retry.
+      // 401 gets a specific message pointing at the Token Debugger.
+      const msg = e instanceof ApiError && e.isAuth
+        ? `Not authorised (${e.status}) — verify email in Keycloak or check /debug/token`
+        : (e?.message ?? 'Save failed — please try again');
+      setJsonErr(msg);
     } finally {
       setSaving(false);
     }
@@ -865,7 +739,22 @@ function AdapterModal({ adapter, onSave, onClose }) {
           {/* Footer */}
           <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button loading={saving} disabled={!!jsonErr || !form.name.trim()} onClick={handleSave}>
+            <Button
+              loading={saving}
+              disabled={!!jsonErr || !form.name.trim()}
+              onClick={() => {
+                // Attach .catch() at the call site so any rejection that
+                // escapes the inner try/catch is still caught here and never
+                // becomes an unhandled promise rejection in the browser.
+                handleSave().catch(e => {
+                  const msg = e instanceof ApiError && e.isAuth
+                    ? `Not authorised (${e.status}) — verify email in Keycloak or check /debug/token`
+                    : (e?.message ?? 'Save failed — please try again');
+                  setJsonErr(msg);
+                  setSaving(false);
+                });
+              }}
+            >
               {isEdit ? 'Save changes' : 'Add adapter'}
             </Button>
           </div>
@@ -877,26 +766,10 @@ function AdapterModal({ adapter, onSave, onClose }) {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Adapters({ keycloak }) {
-  const [adapters,     setAdapters]     = useState([]);
-  const [perfMap,      setPerfMap]      = useState({});
-  const [loading,      setLoading]      = useState(true);
-  const [modal,        setModal]        = useState(null);
-  const [quickAddOpen, setQuickAddOpen] = useState(false);
-
-  function handlePresetSelect(preset) {
-    setModal({
-      _isPreset:          true,
-      name:               preset.formDefaults.name,
-      provider:           preset.provider,
-      modelId:            preset.formDefaults.modelId,
-      adapterType:        'LLM',
-      region:             '',
-      allowedIntentTypes: [],
-      config:             JSON.stringify(preset.formDefaults.config, null, 2),
-      capabilityFlags:    '{}',
-      isActive:           true,
-    });
-  }
+  const [adapters, setAdapters] = useState([]);
+  const [perfMap,  setPerfMap]  = useState({});   // adapterId → performance profile
+  const [loading,  setLoading]  = useState(true);
+  const [modal,    setModal]    = useState(null);  // null | 'new' | adapter obj
 
   // ── Load adapters + their performance profiles ─────────────────────────────
 
@@ -918,6 +791,8 @@ export default function Adapters({ keycloak }) {
         }
       });
       setPerfMap(map);
+    } catch {
+      // API unavailable or auth error — keep existing list, don't crash
     } finally {
       setLoading(false);
     }
@@ -933,9 +808,16 @@ export default function Adapters({ keycloak }) {
   }
 
   async function handleSave(form) {
-    if (form.id) await updateAdapter(keycloak, form.id, form);
-    else          await createAdapter(keycloak, form);
-    load();
+    try {
+      if (form.id) await updateAdapter(keycloak, form.id, form);
+      else          await createAdapter(keycloak, form);
+      load();
+    } catch (e) {
+      // Re-throw so AdapterModal's catch block can display it inline.
+      // Without this explicit re-throw the promise rejection was unhandled
+      // at the outer level before the modal's catch could intercept it.
+      throw e;
+    }
   }
 
   // ── Summary stats ──────────────────────────────────────────────────────────
@@ -1024,15 +906,6 @@ export default function Adapters({ keycloak }) {
             </div>
         )}
 
-        {/* ── Quick add presets ── */}
-        {!loading && (
-            <QuickAddSection
-                onSelect={handlePresetSelect}
-                collapsed={adapters.length > 0 && !quickAddOpen}
-                onToggle={() => setQuickAddOpen(o => !o)}
-            />
-        )}
-
         {/* ── Main content ── */}
         {loading ? (
             <div className="flex justify-center py-16"><Spinner className="w-8 h-8" /></div>
@@ -1041,7 +914,7 @@ export default function Adapters({ keycloak }) {
               <EmptyState
                   icon={<Puzzle size={22} />}
                   title="No adapters configured"
-                  description="Use Quick add above to get started, or click Add adapter for a blank form. AdapterRegistry requires is_active=true and adapter_type='LLM'."
+                  description="Add at least one LLM adapter so the execution engine can route intents. The AdapterRegistry query requires is_active=true and adapter_type='LLM'."
                   action={
                     <Button onClick={() => setModal('new')}>
                       <Plus size={14} /> Add first adapter

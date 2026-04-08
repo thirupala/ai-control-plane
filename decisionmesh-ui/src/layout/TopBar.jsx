@@ -38,6 +38,9 @@ function useBreadcrumbs() {
 }
 
 // ── Credit balance pill ───────────────────────────────────────────────────────
+// Fix: previously navigated to '/billing' — now goes to '/billing?tab=credits'
+// so all three credit entry points (banner, sidebar footer, TopBar pill) are
+// consistent and land on the credit top-up tab.
 function CreditPill() {
   const navigate = useNavigate();
   const { balance, allocated, isLow, isEmpty, statusColor } = useCredits();
@@ -47,8 +50,8 @@ function CreditPill() {
 
   return (
     <button
-      onClick={() => navigate('/billing')}
-      title={`${balance?.toLocaleString()} credits remaining — click to manage`}
+      onClick={() => navigate('/billing?tab=credits')}
+      title={`${balance?.toLocaleString()} credits remaining — click to top up`}
       className="hidden sm:flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 hover:border-slate-300 transition-colors"
     >
       <Zap size={12} style={{ color: statusColor }} />
@@ -159,7 +162,7 @@ function UserMenu({ keycloak }) {
 // ── TopBar ────────────────────────────────────────────────────────────────────
 export default function TopBar({ keycloak, sidebarHidden, onToggleSidebar }) {
   const crumbs = useBreadcrumbs();
-  const { activeProject } = useProject();
+  const { activeProject, loading: projectLoading } = useProject();
 
   return (
     <header className="flex items-center justify-between bg-white border-b border-slate-100 shrink-0"
@@ -187,11 +190,10 @@ export default function TopBar({ keycloak, sidebarHidden, onToggleSidebar }) {
 
       {/* Right: credit pill + bell + active project + user menu */}
       <div className="flex items-center gap-2 shrink-0">
-        {/* Live credit balance */}
         <CreditPill />
 
         {/* Active project pill */}
-        {activeProject && (
+        {!projectLoading && activeProject && (
           <span className="hidden lg:flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 max-w-28">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
             <span className="truncate">{activeProject.name}</span>

@@ -28,6 +28,8 @@ export function shortId(uuid) {
   return uuid ? uuid.split('-')[0] : '—';
 }
 
+// Fix: added FAILED, CANCELLED, REJECTED so terminal failure states render
+// with explicit colours rather than falling back to the generic grey default.
 export const PHASE_COLORS = {
   CREATED:         'bg-slate-100 text-slate-700',
   PLANNING:        'bg-blue-100 text-blue-700',
@@ -36,6 +38,9 @@ export const PHASE_COLORS = {
   RETRY_SCHEDULED: 'bg-orange-100 text-orange-700',
   EVALUATING:      'bg-purple-100 text-purple-700',
   COMPLETED:       'bg-green-100 text-green-700',
+  FAILED:          'bg-red-100 text-red-700',
+  CANCELLED:       'bg-slate-100 text-slate-500',
+  REJECTED:        'bg-red-50 text-red-600',
 };
 
 export const SATISFACTION_COLORS = {

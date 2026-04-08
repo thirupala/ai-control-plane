@@ -23,6 +23,8 @@ export function CardContent({ children, className }) {
 }
 
 // ── Button ────────────────────────────────────────────────────────────────────
+// Fix: primary variant was 'bg-slate-200' (grey) — changed to 'bg-blue-600'
+// so the call-to-action button is visually distinct from secondary actions.
 export function Button({ children, variant = 'primary', size = 'md', loading, className, ...props }) {
   return (
     <button
@@ -30,7 +32,7 @@ export function Button({ children, variant = 'primary', size = 'md', loading, cl
       className={cn(
         'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
         {
-          primary:     'bg-slate-200 text-slate-800 hover:bg-slate-300 border border-slate-300',
+          primary:     'bg-blue-600 text-white hover:bg-blue-700',
           secondary:   'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 hover:text-slate-800',
           ghost:       'text-slate-500 hover:bg-slate-100 hover:text-slate-700',
           destructive: 'bg-red-600 text-white hover:bg-red-700',

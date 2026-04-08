@@ -17,8 +17,6 @@ import java.util.UUID;
 
 /**
  * Rate limiting filter using RESTEasy Reactive's @ServerRequestFilter.
- * Returns Uni<Response>: null response = continue chain, non-null = abort with that response.
- * Uses Vertx.executeBlocking() to run blocking Redis calls off the event loop.
  */
 @ApplicationScoped
 public class RateLimitFilter {
@@ -38,31 +36,28 @@ public class RateLimitFilter {
     @ServerRequestFilter(priority = 5020)
     public Uni<Response> filter(ContainerRequestContext requestContext) {
 
-        // Skip CORS preflight immediately on event loop
+        // 1. Skip CORS preflight
         if ("OPTIONS".equalsIgnoreCase(requestContext.getMethod())) {
             return Uni.createFrom().nullItem();
         }
 
-        // Capture values before leaving event loop thread
         String method = requestContext.getMethod();
         String path   = requestContext.getUriInfo().getPath();
 
-        // Offload all blocking Redis calls to a worker thread
+        // 2. Offload Redis calls to worker pool to avoid blocking the Event Loop
         return vertx.executeBlocking(
                 Uni.createFrom().item(() -> doRateLimit(method, path))
         );
     }
 
-    /**
-     * Runs on a worker thread via executeBlocking.
-     * Returns null to continue, or a Response to abort the request.
-     */
     private Response doRateLimit(String method, String path) {
-
         UUID tenantId;
+        UUID userId;
 
         try {
-            tenantId = tenantContext.tenantId();
+            // FIXED: Use public getter methods instead of private fields
+            tenantId = tenantContext.getTenantId();
+            userId   = tenantContext.getUserId();
         } catch (WebApplicationException e) {
             Log.debugf("No tenant context for rate limiting on path: %s — skipping", path);
             return null;
@@ -73,10 +68,11 @@ public class RateLimitFilter {
         // -------------------------
         // API key rate limiting
         // -------------------------
+        // FIXED: Use public isApiKey() method
         if (tenantContext.isApiKey()) {
-            String apiKeyKey = "ratelimit:apikey:" + tenantContext.userId();
+            String apiKeyKey = "ratelimit:apikey:" + userId;
             if (!rateLimiter.allow(apiKeyKey, policy.apiKeyLimit(), windowSeconds)) {
-                Log.warnf("API key rate limit exceeded for user: %s", tenantContext.userId());
+                Log.warnf("API key rate limit exceeded for user: %s", userId);
                 return rateLimitResponse(windowSeconds);
             }
         }
@@ -101,7 +97,7 @@ public class RateLimitFilter {
             }
         }
 
-        return null; // null = continue to next filter/resource
+        return null; // Continue request
     }
 
     private Response rateLimitResponse(int windowSeconds) {

@@ -1,7 +1,7 @@
 package com.decisionmesh.contracts.security.service;
 
 import com.decisionmesh.contracts.security.entity.ProjectEntity;
-import com.decisionmesh.contracts.security.entity.MemberEntity;
+import com.decisionmesh.contracts.security.entity.MemberShipEntity;
 import io.quarkus.hibernate.reactive.panache.Panache;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -28,7 +28,7 @@ public class ProjectService {
 
             return project.<ProjectEntity>persist()
                     .flatMap(savedProject -> {
-                        MemberEntity member = new MemberEntity();
+                        MemberShipEntity member = new MemberShipEntity();
                         member.tenantId = tenantId;
                         member.userId = userId;
                         member.projectId = savedProject.id;

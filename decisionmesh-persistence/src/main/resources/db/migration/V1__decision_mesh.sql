@@ -131,7 +131,7 @@ CREATE TABLE projects
 
 CREATE INDEX idx_projects_tenant ON projects (tenant_id);
 
-CREATE TABLE members
+CREATE TABLE membership
 (
     id             UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
     tenant_id      UUID        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
@@ -148,10 +148,10 @@ CREATE TABLE members
     CONSTRAINT uq_tenant_user_project UNIQUE NULLS NOT DISTINCT (tenant_id, user_id, project_id)
 );
 
-CREATE INDEX idx_members_user ON members (user_id);
-CREATE INDEX idx_members_tenant ON members (tenant_id);
-CREATE INDEX idx_members_project ON members (project_id);
-CREATE INDEX idx_members_user_id ON members (user_id);
+CREATE INDEX idx_members_user ON membership (user_id);
+CREATE INDEX idx_members_tenant ON membership (tenant_id);
+CREATE INDEX idx_members_project ON membership (project_id);
+CREATE INDEX idx_members_user_id ON membership (user_id);
 
 CREATE TABLE invitations
 (

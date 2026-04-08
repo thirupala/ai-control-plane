@@ -6,16 +6,7 @@ import Page from '../components/shared/Page';
 import { Card, CardHeader, CardTitle, CardContent, Button, Spinner } from '../components/shared';
 import { useCredits, MODEL_TIERS } from '../context/CreditContext';
 import { formatDate } from '../lib/utils';
-
-const API = 'http://localhost:8080/api';
-async function api(keycloak, path, opts = {}) {
-  if (keycloak?.token) await keycloak.updateToken(30).catch(() => {});
-  const res = await fetch(`${API}${path}`, {
-    ...opts, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${keycloak?.token}`, ...(opts.headers ?? {}) },
-  });
-  if (!res.ok) return null;
-  return res.json().catch(() => null);
-}
+import { getBillingSubscription, getBillingUsage, createCheckout } from '../utils/api';
 
 // ── Plans ─────────────────────────────────────────────────────────────────────
 const PLANS = [
@@ -187,9 +178,12 @@ export default function Billing({ keycloak }) {
   const [tab,          setTab]          = useState(searchParams.get('tab') === 'credits' ? 'credits' : 'plans');
 
   useEffect(() => {
+    // Fix: replaced private api() helper (which had its own hardcoded URL and
+    // duplicated auth logic) with named functions from utils/api.js that use
+    // the shared request() helper — consistent token refresh and base URL.
     Promise.allSettled([
-      api(keycloak, '/billing/subscription'),
-      api(keycloak, '/billing/usage'),
+      getBillingSubscription(keycloak),
+      getBillingUsage(keycloak),
     ]).then(([sub, use]) => {
       if (sub.value) setSubscription(sub.value);
       if (use.value) setUsage(use.value);
@@ -200,14 +194,11 @@ export default function Billing({ keycloak }) {
     if (!plan.stripePriceId) return;
     setSelecting(plan.id);
     try {
-      const res = await api(keycloak, '/billing/checkout', {
-        method: 'POST',
-        body: JSON.stringify({
-          priceId:    plan.stripePriceId,
-          mode:       'subscription',
-          successUrl: `${window.location.origin}/billing?success=1`,
-          cancelUrl:  `${window.location.origin}/billing?cancelled=1`,
-        }),
+      const res = await createCheckout(keycloak, {
+        priceId:    plan.stripePriceId,
+        mode:       'subscription',
+        successUrl: `${window.location.origin}/billing?success=1`,
+        cancelUrl:  `${window.location.origin}/billing?cancelled=1`,
       });
       if (res?.checkoutUrl) window.location.href = res.checkoutUrl;
       else window.open('https://buy.stripe.com/test_placeholder', '_blank');
@@ -218,14 +209,11 @@ export default function Billing({ keycloak }) {
   async function handleBuyCredits(pack) {
     setSelecting(pack.id);
     try {
-      const res = await api(keycloak, '/billing/checkout', {
-        method: 'POST',
-        body: JSON.stringify({
-          priceId:    pack.stripePriceId,
-          mode:       'payment',
-          successUrl: `${window.location.origin}/billing?success=1&credits=${pack.credits}`,
-          cancelUrl:  `${window.location.origin}/billing?cancelled=1`,
-        }),
+      const res = await createCheckout(keycloak, {
+        priceId:    pack.stripePriceId,
+        mode:       'payment',
+        successUrl: `${window.location.origin}/billing?success=1&credits=${pack.credits}`,
+        cancelUrl:  `${window.location.origin}/billing?cancelled=1`,
       });
       if (res?.checkoutUrl) window.location.href = res.checkoutUrl;
       else window.open('https://buy.stripe.com/test_placeholder', '_blank');
@@ -233,9 +221,9 @@ export default function Billing({ keycloak }) {
     finally { setSelecting(null); }
   }
 
-  const currentPlan = subscription?.plan ?? 'free';
-  const isSuccess   = searchParams.get('success') === '1';
-  const isCancelled = searchParams.get('cancelled') === '1';
+  const currentPlan   = subscription?.plan ?? 'free';
+  const isSuccess     = searchParams.get('success') === '1';
+  const isCancelled   = searchParams.get('cancelled') === '1';
   const creditsBought = searchParams.get('credits');
 
   return (

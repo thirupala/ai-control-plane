@@ -1,4 +1,4 @@
-package com.decisionmesh.analytics;
+package com.decisionmesh.bootstrap.service;
 
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;

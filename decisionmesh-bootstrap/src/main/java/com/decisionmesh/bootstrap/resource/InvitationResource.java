@@ -1,13 +1,12 @@
 package com.decisionmesh.bootstrap.resource;
 
 import com.decisionmesh.bootstrap.service.InvitationService;
-import com.decisionmesh.contracts.security.entity.AuthenticatedIdentity;
 import com.decisionmesh.persistence.entity.InvitationEntity;
-import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.mutiny.Uni;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 
 import java.util.List;
 import java.util.Map;
@@ -19,23 +18,16 @@ import java.util.UUID;
 public class InvitationResource {
 
     @Inject InvitationService service;
-    @Inject SecurityIdentity identity;
+    @Inject JsonWebToken      jwt;
 
     @POST
     public Uni<InvitationEntity> invite(Map<String, String> body) {
-
-        UUID tenantId = resolveTenant();
-
-        return service.createInvitation(
-                tenantId,
-                body.get("email"),
-                body.get("role")
-        );
+        return service.createInvitation(tenantId(), body.get("email"), body.get("role"));
     }
 
     @GET
     public Uni<List<InvitationEntity>> list() {
-        return service.list(resolveTenant());
+        return service.list(tenantId());
     }
 
     @DELETE
@@ -44,7 +36,10 @@ public class InvitationResource {
         return service.revoke(id);
     }
 
-    private UUID resolveTenant() {
-        return identity.getCredential(AuthenticatedIdentity.class).tenantId();
+    private UUID tenantId() {
+        String tid = jwt.getClaim("tenantId");
+        if (tid == null || tid.isBlank()) throw new ForbiddenException("Missing tenantId in token");
+        try { return UUID.fromString(tid); }
+        catch (IllegalArgumentException e) { throw new BadRequestException("Invalid tenantId format"); }
     }
 }

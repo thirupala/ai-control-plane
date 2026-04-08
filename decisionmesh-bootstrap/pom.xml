@@ -12,6 +12,10 @@
     <dependencies>
         <!--  ── Internal modules ────────────────────────────────────────────  -->
         <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-vertx</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.decisionmesh</groupId>
             <artifactId>decisionmesh-domain</artifactId>
         </dependency>

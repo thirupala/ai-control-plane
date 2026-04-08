@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { getOrg, listProjects } from '../utils/api';
 
 // ── Default data ──────────────────────────────────────────────────────────────
 // Used as fallback when the API hasn't returned yet or isn't available.
@@ -23,10 +24,10 @@ const DEFAULT_PROJECT = {
 const ProjectContext = createContext(null);
 
 export function ProjectProvider({ keycloak, children }) {
-  const [org,            setOrg]            = useState(DEFAULT_ORG);
-  const [projects,       setProjects]       = useState([DEFAULT_PROJECT]);
-  const [activeProject,  setActiveProject]  = useState(DEFAULT_PROJECT);
-  const [loading,        setLoading]        = useState(true);
+  const [org,           setOrg]           = useState(DEFAULT_ORG);
+  const [projects,      setProjects]      = useState([DEFAULT_PROJECT]);
+  const [activeProject, setActiveProject] = useState(DEFAULT_PROJECT);
+  const [loading,       setLoading]       = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -37,23 +38,21 @@ export function ProjectProvider({ keycloak, children }) {
         return;
       }
       try {
-        const headers = { Authorization: `Bearer ${keycloak.token}` };
-        const base    = 'http://localhost:8080/api';
-
+        // Uses the shared request() helper (token refresh + 401 handling)
+        // instead of duplicate fetch calls with a hardcoded URL.
         const [orgRes, projRes] = await Promise.allSettled([
-          fetch(`${base}/org`, { headers }),
-          fetch(`${base}/projects`, { headers }),
+          getOrg(keycloak),
+          listProjects(keycloak),
         ]);
 
         if (!active) return;
 
-        if (orgRes.status === 'fulfilled' && orgRes.value.ok) {
-          const data = await orgRes.value.json();
-          setOrg({ ...DEFAULT_ORG, ...data });
+        if (orgRes.status === 'fulfilled' && orgRes.value) {
+          setOrg({ ...DEFAULT_ORG, ...orgRes.value });
         }
 
-        if (projRes.status === 'fulfilled' && projRes.value.ok) {
-          const data = await projRes.value.json();
+        if (projRes.status === 'fulfilled' && projRes.value) {
+          const data = projRes.value;
           const list = Array.isArray(data) ? data : (data.content ?? []);
           if (list.length > 0) {
             setProjects(list);

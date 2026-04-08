@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { getCreditBalance } from '../utils/api';
 
 const CreditContext = createContext(null);
 
@@ -30,18 +31,18 @@ export const MODEL_TIERS = {
 };
 
 export function CreditProvider({ keycloak, children }) {
-  const [balance,   setBalance]   = useState(null);   // null = loading
-  const [allocated, setAllocated] = useState(null);   // monthly allocation
+  const [balance,   setBalance]   = useState(null);
+  const [allocated, setAllocated] = useState(null);
   const [plan,      setPlan]      = useState('free');
+  const [loading,   setLoading]   = useState(true); // explicit loading flag
 
   const load = useCallback(async () => {
     if (!keycloak?.authenticated) return;
     try {
-      const res = await fetch('http://localhost:8080/api/credits/balance', {
-        headers: { Authorization: `Bearer ${keycloak.token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
+      // Uses the shared request() helper (token refresh + 401 handling)
+      // instead of a duplicate fetch with a hardcoded URL.
+      const data = await getCreditBalance(keycloak);
+      if (data) {
         setBalance(data.balance ?? 500);
         setAllocated(data.monthlyAllocation ?? 500);
         setPlan(data.plan ?? 'free');
@@ -51,6 +52,8 @@ export function CreditProvider({ keycloak, children }) {
       }
     } catch {
       setBalance(500); setAllocated(500); setPlan('free');
+    } finally {
+      setLoading(false);
     }
   }, [keycloak?.authenticated]);
 
@@ -76,6 +79,7 @@ export function CreditProvider({ keycloak, children }) {
     <CreditContext.Provider value={{
       balance, allocated, plan, pct,
       isLow, isEmpty, statusColor,
+      loading,
       deductCredits, refundCredits,
       reload: load,
     }}>

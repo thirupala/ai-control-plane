@@ -4,23 +4,19 @@ import com.decisionmesh.application.service.ControlPlaneOrchestrator;
 import com.decisionmesh.bootstrap.service.IntentService;
 import com.decisionmesh.bootstrap.dto.IntentEventDto;
 import com.decisionmesh.bootstrap.dto.IntentResponse;
-import com.decisionmesh.contracts.security.entity.AuthenticatedIdentity;
 import com.decisionmesh.domain.intent.Intent;
 import com.decisionmesh.persistence.entity.IntentEntity;
-
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.quarkus.logging.Log;
-import io.quarkus.security.Authenticated;
-import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.common.annotation.NonBlocking;
 import io.smallrye.mutiny.Uni;
-
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
-import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 
 import java.util.List;
 import java.util.UUID;
@@ -28,39 +24,18 @@ import java.util.UUID;
 @Path("/api/intents")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
+@RolesAllowed({"admin", "tenant_admin", "tenant_user"})
 public class IntentResource {
 
-    @Inject SecurityIdentity         securityIdentity;
+    @Inject JsonWebToken             jwt;
     @Inject ControlPlaneOrchestrator orchestrator;
     @Inject IntentService            intentService;
 
-    // ─────────────────────────────────────────────────────────────
-    // Identity
-    // ─────────────────────────────────────────────────────────────
-
-    @GET
-    @Path("/auth/me")
-    @Authenticated
-    public AuthenticatedIdentity me() {
-        return securityIdentity.getCredential(AuthenticatedIdentity.class);
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // Submit Intent
-    //
-    // Returns UUID immediately after CREATED is persisted.
-    // Remaining pipeline runs asynchronously in the background.
-    //
-    // @WithSession required: intentRepository.save() inside the
-    // orchestrator's sync Phase 1 chain needs a Hibernate Reactive
-    // session bound to the Vert.x duplicated context. Without it:
-    //   "No current Quarkus vertx context found"
-    // ─────────────────────────────────────────────────────────────
+    // ── Submit ────────────────────────────────────────────────────────────────
 
     @POST
     @NonBlocking
     @WithSession
-    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<UUID> submit(Intent intent,
                             @HeaderParam("Idempotency-Key") String idempotencyKey) {
         if (intent == null)
@@ -68,108 +43,89 @@ public class IntentResource {
         if (idempotencyKey == null || idempotencyKey.isBlank())
             throw new BadRequestException("Missing Idempotency-Key header");
 
-        AuthenticatedIdentity auth = resolveIdentity();
-        intent.setTenantId(auth.tenantId());
-        intent.setUserId(auth.userId());
+        UUID tenantId = tenantId();
+        UUID userId   = userId();
+
+        intent.setTenantId(tenantId);
+        intent.setUserId(userId);
 
         Log.infof("Intent submission: id=%s tenant=%s type=%s",
-                intent.getId(), auth.tenantId(), intent.getIntentType());
+                intent.getId(), tenantId, intent.getIntentType());
 
-        return orchestrator.submit(intent, auth.tenantId(), idempotencyKey, intent.getIntentType());
+        return orchestrator.submit(intent, tenantId, idempotencyKey, intent.getIntentType());
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Get Single Intent
-    // ─────────────────────────────────────────────────────────────
+    // ── Get single ────────────────────────────────────────────────────────────
 
     @GET
     @Path("/{intentId}")
     @WithSession
     @NonBlocking
-    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<IntentEntity> get(@PathParam("intentId") UUID intentId) {
-        AuthenticatedIdentity auth = resolveIdentity();
-        return intentService.getIntent(auth.tenantId(), intentId)
+        return intentService.getIntent(tenantId(), intentId)
                 .onItem().ifNull().failWith(
                         new NotFoundException("Intent not found: " + intentId));
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Get Intent Events
-    //
-    // BUG FIX: dropped when service layer was introduced.
-    // ExecutionTimeline.jsx polls this every 5s:
-    //   GET /api/intents/{id}/events  →  List<IntentEventDto>
-    // Without it every poll returned 404, the timeline had no events
-    // to render, and the UI showed CREATED/In progress permanently —
-    // even after the pipeline reached SATISFIED in the database.
-    // ─────────────────────────────────────────────────────────────
+    // ── Get events ────────────────────────────────────────────────────────────
 
     @GET
     @Path("/{intentId}/events")
     @WithSession
     @NonBlocking
-    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<List<IntentEventDto>> getEvents(@PathParam("intentId") UUID intentId) {
-        AuthenticatedIdentity auth = resolveIdentity();
-        return intentService.getIntentEvents(auth.tenantId(), intentId);
+        return intentService.getIntentEvents(tenantId(), intentId);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // List Intents (Paginated)
-    // ─────────────────────────────────────────────────────────────
+    // ── List ──────────────────────────────────────────────────────────────────
 
     @GET
     @WithSession
-    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<IntentResponse> list(
             @QueryParam("page")  @DefaultValue("0")              int    page,
             @QueryParam("size")  @DefaultValue("20")             int    size,
             @QueryParam("sort")  @DefaultValue("createdAt,desc") String sort,
             @QueryParam("phase")                                 String phase) {
 
-        AuthenticatedIdentity auth = resolveIdentity();
-
-        String[] parts   = sort.split(",", 2);
-        String sortField = parts[0].trim();
-        String sortDir   = parts.length > 1 ? parts[1].trim() : "desc";
-
-        int clampedSize = Math.min(Math.max(size, 1), 100);
+        String[] parts    = sort.split(",", 2);
+        String sortField  = parts[0].trim();
+        String sortDir    = parts.length > 1 ? parts[1].trim() : "desc";
+        int    clampedSize = Math.min(Math.max(size, 1), 100);
         String phaseFilter = (phase != null && !phase.isBlank()) ? phase.toUpperCase() : null;
 
         return intentService.getIntents(
-                auth.tenantId(), phaseFilter, sortField, sortDir, page, clampedSize);
+                tenantId(), phaseFilter, sortField, sortDir, page, clampedSize);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Delete Intent
-    // ─────────────────────────────────────────────────────────────
+    // ── Delete ────────────────────────────────────────────────────────────────
 
     @DELETE
     @Path("/{intentId}")
     @WithTransaction
     @NonBlocking
-    @RolesAllowed({"admin", "tenant_admin", "tenant_user"})
     public Uni<Response> delete(@PathParam("intentId") UUID intentId) {
-        AuthenticatedIdentity auth = resolveIdentity();
-        return intentService.deleteIntent(auth.tenantId(), intentId)
+        return intentService.deleteIntent(tenantId(), intentId)
                 .map(deleted -> deleted
                         ? Response.noContent().build()
                         : Response.status(Response.Status.NOT_FOUND).build())
                 .onFailure().recoverWithItem(ex -> Response.serverError().build());
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private AuthenticatedIdentity resolveIdentity() {
-        AuthenticatedIdentity auth =
-                securityIdentity.getCredential(AuthenticatedIdentity.class);
-        if (auth == null) {
-            throw new NotAuthorizedException(
-                    "Identity not resolved — check IdentityAugmentor");
-        }
-        return auth;
+    private UUID tenantId() {
+        String tid = jwt.getClaim("tenantId");
+        if (tid == null || tid.isBlank()) throw new ForbiddenException("Missing tenantId in token");
+        try { return UUID.fromString(tid); }
+        catch (IllegalArgumentException e) { throw new BadRequestException("Invalid tenantId format"); }
+    }
+
+    // userId is written to Keycloak by OnboardingService.writeKeycloakTenantId()
+    // and mapped via the 'userId' User Attribute mapper on control-plane-web-dedicated scope
+    private UUID userId() {
+        String uid = jwt.getClaim("userId");
+        if (uid == null || uid.isBlank()) throw new ForbiddenException("Missing userId in token");
+        try { return UUID.fromString(uid); }
+        catch (IllegalArgumentException e) { throw new BadRequestException("Invalid userId format"); }
     }
 }

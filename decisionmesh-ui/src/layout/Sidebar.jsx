@@ -5,10 +5,11 @@ import {
   Puzzle, ShieldCheck, BarChart3, TrendingUp,
   KeyRound, ScrollText, ChevronLeft, ChevronRight,
   Zap, UserPlus, PanelLeftClose, FolderOpen,
-  ChevronDown, Check, Plus, Palette, CreditCard, Receipt,
+  ChevronDown, Check, Plus, Palette, CreditCard, Receipt, Bug,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useProject } from '../context/ProjectContext';
+import { useCredits } from '../context/CreditContext';
 
 const NAV = [
   { label: 'Dashboard',   icon: LayoutDashboard, to: '/' },
@@ -25,6 +26,7 @@ const NAV = [
   { label: 'Credits',     icon: Receipt,         to: '/credits' },
   { label: 'Branding',    icon: Palette,         to: '/org/branding' },
   { label: 'Billing',     icon: CreditCard,      to: '/billing' },
+  { label: 'Token Debug', icon: Bug,             to: '/debug/token' },
 ];
 
 const ENV_DOTS = {
@@ -33,8 +35,9 @@ const ENV_DOTS = {
   Dev:        'bg-blue-500',
 };
 
-import { useCredits } from '../context/CreditContext';
-
+// Fix: previously navigated to '/billing' — now goes to '/billing?tab=credits'
+// so the user lands directly on the credit top-up tab, consistent with the
+// banner and TopBar pill.
 function CreditFooter() {
   const navigate = useNavigate();
   const { balance, allocated, statusColor, isEmpty, isLow } = useCredits();
@@ -42,7 +45,7 @@ function CreditFooter() {
   const pct = allocated ? Math.min(100, (balance / allocated) * 100) : 100;
   return (
     <div
-      onClick={() => navigate('/billing')}
+      onClick={() => navigate('/billing?tab=credits')}
       className="mx-2 mb-1 p-2.5 rounded-lg hover:bg-slate-50 cursor-pointer border border-slate-100 transition-colors"
     >
       <div className="flex items-center justify-between mb-1.5">
@@ -66,8 +69,12 @@ function CreditFooter() {
 
 function ProjectSwitcher() {
   const navigate = useNavigate();
-  const { org, projects, activeProject, switchProject } = useProject();
+  const { org, projects, activeProject, switchProject, loading } = useProject();
   const [open, setOpen] = useState(false);
+
+  // Render nothing while data is in-flight so the user never sees the
+  // "My Organisation / Default Project" placeholders snap to real values.
+  if (loading) return <div className="h-12 border-b border-slate-100" />;
 
   function handleSwitch(project) {
     switchProject(project);

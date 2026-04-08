@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { getOrgBranding } from '../utils/api';
 
 const DEFAULT_BRANDING = {
   orgName:      'DecisionMesh',
@@ -33,7 +34,6 @@ function applyBrandingToDOM(branding) {
   const root = document.documentElement;
   const [h, s, l] = hexToHsl(branding.primaryColor || DEFAULT_BRANDING.primaryColor);
 
-  // Set CSS variables used throughout the app
   root.style.setProperty('--brand-h',       h);
   root.style.setProperty('--brand-s',       `${s}%`);
   root.style.setProperty('--brand-l',       `${l}%`);
@@ -42,14 +42,12 @@ function applyBrandingToDOM(branding) {
   root.style.setProperty('--brand-dark',    `hsl(${h}, ${s}%, ${Math.max(l - 10, 10)}%)`);
   root.style.setProperty('--brand-text',    `hsl(${h}, ${Math.min(s + 10, 100)}%, ${Math.max(l - 20, 15)}%)`);
 
-  // Update favicon if provided
   if (branding.favicon) {
     let link = document.querySelector("link[rel~='icon']");
     if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
     link.href = branding.favicon;
   }
 
-  // Update page title
   if (branding.orgName) {
     document.title = `${branding.orgName} — AI Control Plane`;
   }
@@ -60,25 +58,28 @@ export function BrandingProvider({ keycloak, children }) {
   const [loading,  setLoading]  = useState(true);
 
   useEffect(() => {
-    // Apply defaults immediately so UI renders branded from the start
+    // Apply defaults immediately so the UI renders branded from the start.
     applyBrandingToDOM(DEFAULT_BRANDING);
 
     if (!keycloak?.authenticated) { setLoading(false); return; }
 
-    fetch('http://localhost:8080/api/org/branding', {
-      headers: { Authorization: `Bearer ${keycloak.token}` },
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data) {
-          const merged = { ...DEFAULT_BRANDING, ...data };
-          setBranding(merged);
-          applyBrandingToDOM(merged);
-        }
-      })
-      .catch(() => { /* keep defaults */ })
-      .finally(() => setLoading(false));
-  }, [keycloak?.authenticated]);
+    const parsed = keycloak.tokenParsed;
+    if (!parsed?.tenantId) {
+      setLoading(false);
+      return;
+    }
+    getOrgBranding(keycloak)
+        .then(data => {
+          if (data) {
+            const merged = { ...DEFAULT_BRANDING, ...data };
+            setBranding(merged);
+            applyBrandingToDOM(merged);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+
+  }, [keycloak?.authenticated, keycloak?.tokenParsed?.tenantId]);
 
   function updateBranding(updates) {
     const merged = { ...branding, ...updates };

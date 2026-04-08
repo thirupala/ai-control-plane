@@ -1,14 +1,27 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, X, Zap, ShoppingCart } from 'lucide-react';
+import { AlertTriangle, X, ShoppingCart } from 'lucide-react';
 import { useCredits } from '../../context/CreditContext';
+
+// Dismissal key stored in sessionStorage so the banner stays hidden for the
+// current browser session but reappears on the next visit (when credits may
+// still be low).  Previously this was plain useState which reset on every
+// page navigation.
+const DISMISS_KEY = 'dm_credit_banner_dismissed';
 
 export default function LowCreditBanner() {
   const { balance, isLow, isEmpty, allocated, pct } = useCredits();
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(
+    () => sessionStorage.getItem(DISMISS_KEY) === '1'
+  );
   const navigate = useNavigate();
 
   if ((!isLow && !isEmpty) || dismissed || balance === null) return null;
+
+  function dismiss() {
+    sessionStorage.setItem(DISMISS_KEY, '1');
+    setDismissed(true);
+  }
 
   return (
     <div className={`flex items-center gap-3 px-4 py-2.5 text-sm border-b shrink-0 ${
@@ -33,6 +46,8 @@ export default function LowCreditBanner() {
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
+        {/* Both CTAs go to the same tab so the user lands directly on
+            the credit top-up flow — previously inconsistent across the app. */}
         <button
           onClick={() => navigate('/billing?tab=credits')}
           className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
@@ -50,7 +65,7 @@ export default function LowCreditBanner() {
           Upgrade plan
         </button>
         <button
-          onClick={() => setDismissed(true)}
+          onClick={dismiss}
           className="p-1 rounded hover:bg-black/10 transition-colors"
         >
           <X size={13} />

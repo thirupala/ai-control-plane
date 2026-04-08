@@ -7,10 +7,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "members", uniqueConstraints = {
+@Table(name = "membership", uniqueConstraints = {
         @UniqueConstraint(name = "uq_tenant_user_project", columnNames = {"tenant_id", "user_id", "project_id"})
 })
-public class MemberEntity extends PanacheEntityBase {
+public class MemberShipEntity extends PanacheEntityBase {
 
     @Id
     @GeneratedValue // Let Postgres handle the UUID generation

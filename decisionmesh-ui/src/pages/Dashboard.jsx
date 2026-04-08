@@ -8,7 +8,7 @@ import {
 import { useCredits } from '../context/CreditContext';
 import Page from '../components/shared/Page';
 import { Card, CardHeader, CardTitle, CardContent, MetricCard, PhaseBadge, SatisfactionBadge, Spinner } from '../components/shared';
-import { listIntents, getCostAnalytics, getMe } from '../utils/api';
+import { listIntents, getCostAnalytics } from '../utils/api';
 import { formatCost, formatDate, formatRelative, shortId } from '../lib/utils';
 
 function ChartTip({ active, payload, label, fmt }) {
@@ -102,7 +102,7 @@ function EmptyOnboarding({ onPlayground }) {
   );
 }
 
-// ── Compliance health widget ───────────────────────────────────────────────────
+// ── Compliance health widget ──────────────────────────────────────────────────
 const COMPLIANCE_ITEMS = [
   { icon: Globe,       label: 'EU AI Act', sub: 'Complete traceability',   status: 'ready', color: '#16a34a' },
   { icon: FileText,    label: 'SOC 2',     sub: 'Evidence generation',     status: 'ready', color: '#16a34a' },
@@ -150,39 +150,35 @@ function ComplianceHealth() {
 export default function Dashboard({ keycloak }) {
   const navigate = useNavigate();
   const { balance, allocated, pct, statusColor, isLow, isEmpty } = useCredits();
-  const [intents,       setIntents]       = useState(null);
-  const [costData,      setCostData]      = useState(null);
-  const [authIdentity,  setAuthIdentity]  = useState(null);
-  const [loading,       setLoading]       = useState(true);
+  const [intents,      setIntents]      = useState(null);
+  const [costData,     setCostData]     = useState(null);
+  const [loading,      setLoading]      = useState(true);
 
   useEffect(() => {
+    let active = true;
+
     async function load() {
       try {
-        setLoading(true);
-        // 1. Initial provisioning/identity check
-        const m = await getMe(keycloak);
-        setAuthIdentity(m);
-
-        // 2. Only fetch data if we have a valid tenant context
-        if (m?.tenantId) {
-          const [i, c] = await Promise.all([
-            listIntents(keycloak, { size: 8, sort: 'createdAt,desc' }),
-            getCostAnalytics(keycloak),
-          ]);
-          setIntents(i);
-          setCostData(c);
-        } else {
-          // If no tenantId, it means they are newly provisioned or have no access
-          setIntents({ totalElements: 0, content: [] });
-        }
-      } catch (err) {
-        console.error("Provisioning/Load failed", err);
-      } finally {
-        setLoading(false);
-      }
+        const [i, c] = await Promise.allSettled([
+          listIntents(keycloak, { size: 8, sort: 'createdAt,desc' }),
+          getCostAnalytics(keycloak),
+        ]);
+        if (!active) return;
+        if (i.status === 'fulfilled') setIntents(i.value);
+        if (c.status === 'fulfilled') setCostData(c.value);
+      } finally { if (active) setLoading(false); }
     }
+
     load();
-  }, [keycloak]);
+
+    // Fix: depend on keycloak.authenticated (boolean) rather than the keycloak
+    // object reference.  The Keycloak instance is stable but ESLint/React would
+    // flag the object reference as potentially creating multiple intervals if the
+    // prop ever changes.  Using the boolean is also more semantically correct —
+    // we only want to poll while the user is authenticated.
+    const t = setInterval(load, 30_000);
+    return () => { active = false; clearInterval(t); };
+  }, [keycloak?.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const total     = intents?.totalElements ?? 0;
   const content   = intents?.content ?? [];
@@ -193,13 +189,7 @@ export default function Dashboard({ keycloak }) {
   return (
       <Page
           title="Dashboard"
-          subtitle={
-            authIdentity?.tenantId
-                ? <span className="text-xs text-slate-400 font-mono" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-              tenant&nbsp;·&nbsp;{String(authIdentity.tenantId).split('-')[0]}
-            </span>
-                : 'System overview'
-          }
+          subtitle="System overview"
       >
         {/* KPIs */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -208,7 +198,7 @@ export default function Dashboard({ keycloak }) {
           <MetricCard label="Success rate"   value={`${rate}%`}                                  sub="Recent intents" icon={<CheckCircle size={15}/>} />
           <MetricCard label="Avg cost"       value={formatCost(costData?.avgCostPerIntent ?? 0)} sub="Per intent"     icon={<Zap size={15}/>} />
           <div
-              onClick={() => navigate('/billing')}
+              onClick={() => navigate('/billing?tab=credits')}
               className="bg-white rounded-xl border shadow-sm p-4 cursor-pointer hover:shadow-md transition-all"
               style={{ borderColor: isEmpty ? '#fca5a5' : isLow ? '#fcd34d' : '#e2e8f0' }}
           >
