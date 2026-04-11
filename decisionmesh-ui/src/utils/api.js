@@ -224,3 +224,16 @@ export async function createCheckout(keycloak, body) {
     body: JSON.stringify(body),
   });
 }
+
+// ── Onboarding ────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/onboard/setup-tenant
+ * Called once after first login — sets accountType, creates Keycloak group if org.
+ */
+export async function setupTenant(keycloak, payload) {
+  return request(keycloak, '/onboard/setup-tenant', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}

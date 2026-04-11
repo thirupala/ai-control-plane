@@ -26,6 +26,9 @@ public class OrganizationEntity extends PanacheEntityBase {
     @Column(name = "name", nullable = false, length = 255)
     public String name;
 
+    @Column(name = "company_size", length = 50)
+    public String companySize;
+
     @Column(name = "description")
     public String description;
 

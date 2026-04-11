@@ -20,7 +20,6 @@ public class UserService {
 
         return Panache.withTransaction(() -> {
             UserEntity user     = new UserEntity();
-            user.externalUserId = keycloak_sub;
             user.email          = email;
             user.name           = name;
             user.isActive       = true;

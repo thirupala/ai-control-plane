@@ -1,37 +1,41 @@
 -- ============================================================
--- V1__complete_decisionmesh_schema.sql
--- All columns folded into CREATE TABLE. No ALTER TABLE anywhere.
+-- V1__decision_mesh.sql
+--
+-- Complete DecisionMesh schema — single source of truth.
+--
+-- Incorporates:
+--   • Original base schema
+--   • V2: audit_log triggers (fn_audit_intents, fn_audit_api_keys,
+--          fn_audit_policies, fn_audit_adapters)
+--   • V3: ON DELETE CASCADE folded into every FK that references intents
+--   • V4: users.user_id = Keycloak sub (no auto-generate, no external_user_id)
+--
+-- No ALTER TABLE anywhere — all changes are in CREATE TABLE definitions.
 -- ============================================================
 
-CREATE
-EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================================================
 -- UTILITY FUNCTIONS
 -- ============================================================
 
-CREATE
-OR REPLACE FUNCTION fn_set_updated_at()
+CREATE OR REPLACE FUNCTION fn_set_updated_at()
     RETURNS TRIGGER LANGUAGE plpgsql AS
 $$
 BEGIN
-    NEW.updated_at
-= now();
+    NEW.updated_at = now();
 RETURN NEW;
 END;
 $$;
 
-CREATE
-OR REPLACE FUNCTION fn_guard_immutable()
+CREATE OR REPLACE FUNCTION fn_guard_immutable()
     RETURNS TRIGGER LANGUAGE plpgsql AS
 $$
 BEGIN
-    IF
-TG_OP = 'UPDATE' THEN
+    IF TG_OP = 'UPDATE' THEN
         RAISE EXCEPTION 'Immutable record violation: table=% id=% (P0001)',
             TG_TABLE_NAME, OLD.id;
-    ELSIF
-TG_OP = 'DELETE' THEN
+    ELSIF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Immutable record violation: table=% id=% (P0001)',
             TG_TABLE_NAME, OLD.id;
 END IF;
@@ -45,15 +49,18 @@ $$;
 
 CREATE TABLE tenants
 (
-    id              UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
-    organization_id UUID,
-    external_id     VARCHAR(255) NOT NULL,
-    name            VARCHAR(255) NOT NULL,
-    status          VARCHAR(50)  NOT NULL DEFAULT 'ACTIVE',
-    config          JSONB                 DEFAULT '{}',
-    created_at      TIMESTAMPTZ           DEFAULT now(),
-    updated_at      TIMESTAMPTZ           DEFAULT now(),
-    CONSTRAINT uq_tenants_external_id UNIQUE (external_id)
+    id                UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
+    external_id       VARCHAR(255) NOT NULL,
+    name              VARCHAR(255) NOT NULL,
+    account_type      VARCHAR(20)  NOT NULL DEFAULT 'INDIVIDUAL',  -- INDIVIDUAL | ORGANIZATION
+    keycloak_group_id VARCHAR(36)           DEFAULT NULL,          -- only for ORGANIZATION
+    status            VARCHAR(50)  NOT NULL DEFAULT 'ACTIVE',
+    config            JSONB                 DEFAULT '{}',
+    created_at        TIMESTAMPTZ           DEFAULT now(),
+    updated_at        TIMESTAMPTZ           DEFAULT now(),
+
+    CONSTRAINT uq_tenants_external_id UNIQUE (external_id),
+    CONSTRAINT chk_account_type CHECK (account_type IN ('INDIVIDUAL', 'ORGANIZATION'))
 );
 
 -- ============================================================
@@ -62,66 +69,81 @@ CREATE TABLE tenants
 
 CREATE TABLE organizations
 (
-    id          UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
-    tenant_id   UUID         NOT NULL REFERENCES tenants (id),
-    name        VARCHAR(255) NOT NULL,
-    description VARCHAR(255),
-    config      JSONB                 DEFAULT '{}',
-    is_active   BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at  TIMESTAMPTZ           DEFAULT now(),
-    updated_at  TIMESTAMPTZ           DEFAULT now()
+    id           UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
+    tenant_id    UUID         NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    name         VARCHAR(255) NOT NULL,
+    company_size VARCHAR(20)           DEFAULT NULL,   -- e.g. "11-50", "51-200"
+    description  VARCHAR(255),
+    config       JSONB                 DEFAULT '{}',
+    is_active    BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at   TIMESTAMPTZ           DEFAULT now(),
+    updated_at   TIMESTAMPTZ           DEFAULT now()
 );
+
+-- ============================================================
+-- USERS
+--
+-- V4: user_id is set explicitly from the Keycloak sub claim (UUID).
+--     No DEFAULT gen_random_uuid() — backend sets this from JWT sub.
+--     external_user_id removed — user_id IS the external identity.
+-- ============================================================
 
 CREATE TABLE users
 (
-    user_id          UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
-    external_user_id VARCHAR(255),
-    email            VARCHAR(255),
-    name             VARCHAR(255),
-    is_active        BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at       TIMESTAMPTZ          DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_users_external_user_id UNIQUE (external_user_id),
+    user_id    UUID PRIMARY KEY,                                    -- set from Keycloak sub
+    tenant_id  UUID         REFERENCES tenants (id) ON DELETE CASCADE, -- null until onboarding done
+    email      VARCHAR(255),
+    name       VARCHAR(255),
+    is_active  BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ           DEFAULT now(),
+    updated_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
     CONSTRAINT uq_users_email UNIQUE (email)
 );
+
+-- ============================================================
+-- USER ORGANIZATIONS
+-- ============================================================
 
 CREATE TABLE user_organizations
 (
     id              UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
-    user_id         UUID REFERENCES users (user_id),
-    organization_id UUID REFERENCES organizations (id),
-    tenant_id       UUID REFERENCES tenants (id),
+    user_id         UUID REFERENCES users (user_id)         ON DELETE CASCADE,
+    organization_id UUID REFERENCES organizations (id)      ON DELETE CASCADE,
+    tenant_id       UUID REFERENCES tenants (id)            ON DELETE CASCADE,
     role            VARCHAR(100),
     permissions     JSONB       NOT NULL DEFAULT '[]',
     is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ          DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
     CONSTRAINT uq_user_organizations_user_org UNIQUE (user_id, organization_id)
 );
 
 -- ============================================================
--- UI SUPPORT: ORGS / BRANDING / PROJECTS / MEMBERS / INVITATIONS
+-- ORG BRANDING
 -- ============================================================
-
-
 
 CREATE TABLE org_branding
 (
-    tenant_id     UUID PRIMARY KEY,
+    tenant_id     UUID PRIMARY KEY REFERENCES tenants (id) ON DELETE CASCADE,
     org_name      VARCHAR(255),
     primary_color VARCHAR(7)           DEFAULT '#2563eb',
     logo_url      VARCHAR(255),
     favicon       VARCHAR(255),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ============================================================
+-- PROJECTS
+-- ============================================================
+
 CREATE TABLE projects
 (
     id          UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
     tenant_id   UUID         NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
-    -- Add Organization if you are still using that layer
-    -- organization_id UUID REFERENCES organizations (id) ON DELETE CASCADE,
     name        VARCHAR(255) NOT NULL,
-    description TEXT, -- Changed to TEXT; 255 is often too short for descriptions
+    description TEXT,
     environment VARCHAR(50)  NOT NULL DEFAULT 'Production',
     is_default  BOOLEAN      NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ           DEFAULT CURRENT_TIMESTAMP,
@@ -131,33 +153,37 @@ CREATE TABLE projects
 
 CREATE INDEX idx_projects_tenant ON projects (tenant_id);
 
+-- ============================================================
+-- MEMBERSHIP
+-- ============================================================
+
 CREATE TABLE membership
 (
     id             UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
-    tenant_id      UUID        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    tenant_id      UUID        NOT NULL REFERENCES tenants (id)  ON DELETE CASCADE,
     user_id        UUID        NOT NULL REFERENCES users (user_id) ON DELETE CASCADE,
-    project_id     UUID REFERENCES projects (id) ON DELETE CASCADE,
-
+    project_id     UUID                 REFERENCES projects (id)  ON DELETE CASCADE,
     role           VARCHAR(20) NOT NULL DEFAULT 'VIEWER',
     joined_at      TIMESTAMPTZ          DEFAULT CURRENT_TIMESTAMP,
     last_active_at TIMESTAMPTZ,
 
-    -- Constraint: Check that roles match your Enum
     CONSTRAINT chk_member_role CHECK (role IN ('ADMIN', 'ANALYST', 'VIEWER')),
-    -- Constraint: Prevent duplicate membership for the same context
     CONSTRAINT uq_tenant_user_project UNIQUE NULLS NOT DISTINCT (tenant_id, user_id, project_id)
 );
 
-CREATE INDEX idx_members_user ON membership (user_id);
-CREATE INDEX idx_members_tenant ON membership (tenant_id);
+CREATE INDEX idx_members_user    ON membership (user_id);
+CREATE INDEX idx_members_tenant  ON membership (tenant_id);
 CREATE INDEX idx_members_project ON membership (project_id);
-CREATE INDEX idx_members_user_id ON membership (user_id);
+
+-- ============================================================
+-- INVITATIONS
+-- ============================================================
 
 CREATE TABLE invitations
 (
     id         UUID PRIMARY KEY,
-    tenant_id  UUID         NOT NULL,
-    project_id UUID,
+    tenant_id  UUID         NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    project_id UUID                  REFERENCES projects (id) ON DELETE CASCADE,
     email      VARCHAR(255) NOT NULL,
     role       VARCHAR(20)  NOT NULL DEFAULT 'VIEWER',
     status     VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
@@ -167,19 +193,18 @@ CREATE TABLE invitations
 );
 
 CREATE INDEX idx_invitations_tenant ON invitations (tenant_id);
-CREATE INDEX idx_invitations_token ON invitations (token);
-CREATE INDEX idx_invitations_email ON invitations (email);
+CREATE INDEX idx_invitations_token  ON invitations (token);
+CREATE INDEX idx_invitations_email  ON invitations (email);
 
 -- ============================================================
 -- API KEYS
--- key_id is the PK (matches ApiKeyEntity @Column(name="key_id"))
 -- ============================================================
 
 CREATE TABLE api_keys
 (
     key_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id          UUID REFERENCES tenants (id),
-    organization_id    UUID REFERENCES organizations (id),
+    tenant_id          UUID REFERENCES tenants (id)       ON DELETE CASCADE,
+    organization_id    UUID REFERENCES organizations (id) ON DELETE CASCADE,
     user_id            UUID,
     created_by_user_id UUID,
     name               VARCHAR(255),
@@ -198,8 +223,8 @@ CREATE TABLE api_keys
     rate_limit         INTEGER
 );
 
-CREATE INDEX idx_api_keys_tenant ON api_keys (tenant_id);
-CREATE INDEX idx_api_keys_user_id ON api_keys (user_id);
+CREATE INDEX idx_api_keys_tenant   ON api_keys (tenant_id);
+CREATE INDEX idx_api_keys_user_id  ON api_keys (user_id);
 CREATE INDEX idx_api_keys_key_hash ON api_keys (key_hash);
 
 -- ============================================================
@@ -209,11 +234,10 @@ CREATE INDEX idx_api_keys_key_hash ON api_keys (key_hash);
 CREATE TABLE adapters
 (
     id                   UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
-    tenant_id            UUID         NOT NULL REFERENCES tenants (id),
+    tenant_id            UUID         NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
     name                 VARCHAR(255) NOT NULL,
     adapter_type         VARCHAR(100)
-        CHECK (adapter_type IN (
-                                'LLM', 'EMBEDDING', 'TOOL', 'RETRIEVAL',
+        CHECK (adapter_type IN ('LLM', 'EMBEDDING', 'TOOL', 'RETRIEVAL',
                                 'RERANKER', 'CLASSIFIER', 'CUSTOM')),
     provider             VARCHAR(100),
     model_id             VARCHAR(255),
@@ -229,14 +253,13 @@ CREATE TABLE adapters
     updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_adapters_tenant ON adapters (tenant_id);
-CREATE INDEX idx_adapters_type ON adapters (tenant_id, adapter_type);
+CREATE INDEX idx_adapters_tenant   ON adapters (tenant_id);
+CREATE INDEX idx_adapters_type     ON adapters (tenant_id, adapter_type);
 CREATE INDEX idx_adapters_provider ON adapters (tenant_id, provider);
-CREATE INDEX idx_adapters_active ON adapters (tenant_id, is_active);
+CREATE INDEX idx_adapters_active   ON adapters (tenant_id, is_active);
 
 CREATE TRIGGER trg_adapters_updated_at
-    BEFORE UPDATE
-    ON adapters
+    BEFORE UPDATE ON adapters
     FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
 
 -- ============================================================
@@ -246,7 +269,7 @@ CREATE TRIGGER trg_adapters_updated_at
 CREATE TABLE intents
 (
     id                 UUID PRIMARY KEY,
-    tenant_id          UUID         NOT NULL,
+    tenant_id          UUID         NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
     user_id            UUID,
     intent_type        VARCHAR(255) NOT NULL,
     phase              VARCHAR(50)  NOT NULL,
@@ -261,22 +284,22 @@ CREATE TABLE intents
     updated_at         TIMESTAMPTZ  NOT NULL
 );
 
-CREATE INDEX idx_intents_tenant ON intents (tenant_id, created_at DESC);
+CREATE INDEX idx_intents_tenant       ON intents (tenant_id, created_at DESC);
 CREATE INDEX idx_intents_tenant_phase ON intents (tenant_id, phase, created_at DESC);
-CREATE INDEX idx_intents_tenant_type ON intents (tenant_id, intent_type, created_at DESC);
-CREATE INDEX idx_intents_terminal ON intents (tenant_id, terminal) WHERE terminal = FALSE;
-CREATE INDEX idx_intent_injection ON intents (injection_risk) WHERE injection_risk > 0.5;
+CREATE INDEX idx_intents_tenant_type  ON intents (tenant_id, intent_type, created_at DESC);
+CREATE INDEX idx_intents_terminal     ON intents (tenant_id, terminal) WHERE terminal = FALSE;
+CREATE INDEX idx_intent_injection     ON intents (injection_risk) WHERE injection_risk > 0.5;
 
 -- ============================================================
 -- PLANS
--- All columns from entity + ALTER statements folded in.
+-- V3: ON DELETE CASCADE folded into FK definitions
 -- ============================================================
 
 CREATE TABLE intent_plans
 (
     id                UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
-    intent_id         UUID REFERENCES intents (id),
-    tenant_id         UUID REFERENCES tenants (id),
+    intent_id         UUID REFERENCES intents (id)  ON DELETE CASCADE,
+    tenant_id         UUID REFERENCES tenants (id)  ON DELETE CASCADE,
     plan_version      INT                  DEFAULT 1,
     strategy          VARCHAR(50) NOT NULL DEFAULT 'SINGLE_ADAPTER',
     status            VARCHAR(50) NOT NULL DEFAULT 'PENDING',
@@ -293,10 +316,10 @@ CREATE INDEX idx_plans_tenant ON intent_plans (tenant_id);
 CREATE TABLE intent_plan_steps
 (
     id                   UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
-    plan_id              UUID REFERENCES intent_plans (id),
-    intent_id            UUID REFERENCES intents (id),
-    tenant_id            UUID REFERENCES tenants (id),
-    adapter_id           UUID REFERENCES adapters (id),
+    plan_id              UUID REFERENCES intent_plans (id)   ON DELETE CASCADE,
+    intent_id            UUID REFERENCES intents (id)        ON DELETE CASCADE,
+    tenant_id            UUID REFERENCES tenants (id)        ON DELETE CASCADE,
+    adapter_id           UUID REFERENCES adapters (id)       ON DELETE SET NULL,
     step_order           INT,
     step_type            VARCHAR(50) NOT NULL DEFAULT 'LLM_CALL',
     is_conditional       BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -307,22 +330,22 @@ CREATE TABLE intent_plan_steps
     created_at           TIMESTAMPTZ          DEFAULT now()
 );
 
-CREATE INDEX idx_plan_steps_plan ON intent_plan_steps (plan_id);
+CREATE INDEX idx_plan_steps_plan   ON intent_plan_steps (plan_id);
 CREATE INDEX idx_plan_steps_intent ON intent_plan_steps (intent_id);
 
 -- ============================================================
 -- EXECUTION RECORDS
--- All columns here — no ALTER TABLE.
+-- V3: ON DELETE CASCADE folded into FK definitions
 -- ============================================================
 
 CREATE TABLE execution_records
 (
     id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id              UUID REFERENCES intents (id),
-    tenant_id              UUID REFERENCES tenants (id),
-    adapter_id             UUID REFERENCES adapters (id),
-    plan_id                UUID REFERENCES intent_plans (id),
-    plan_step_id           UUID REFERENCES intent_plan_steps (id),
+    intent_id              UUID REFERENCES intents (id)           ON DELETE CASCADE,
+    tenant_id              UUID REFERENCES tenants (id)           ON DELETE CASCADE,
+    adapter_id             UUID REFERENCES adapters (id)          ON DELETE SET NULL,
+    plan_id                UUID REFERENCES intent_plans (id)      ON DELETE CASCADE,
+    plan_step_id           UUID REFERENCES intent_plan_steps (id) ON DELETE CASCADE,
     status                 VARCHAR(50),
     cost_usd               NUMERIC(12, 6),
     latency_ms             BIGINT,
@@ -340,62 +363,65 @@ CREATE TABLE execution_records
     executed_at            TIMESTAMPTZ      DEFAULT now()
 );
 
-CREATE INDEX idx_exec_tenant_time ON execution_records (tenant_id, executed_at DESC);
+CREATE INDEX idx_exec_tenant_time    ON execution_records (tenant_id, executed_at DESC);
 CREATE INDEX idx_exec_adapter_status ON execution_records (adapter_id, status, executed_at DESC);
-CREATE INDEX idx_exec_hallucination ON execution_records (hallucination_detected, adapter_id) WHERE hallucination_detected = TRUE;
-CREATE INDEX idx_exec_quality ON execution_records (quality_score, adapter_id) WHERE quality_score IS NOT NULL;
+CREATE INDEX idx_exec_hallucination  ON execution_records (hallucination_detected, adapter_id) WHERE hallucination_detected = TRUE;
+CREATE INDEX idx_exec_quality        ON execution_records (quality_score, adapter_id) WHERE quality_score IS NOT NULL;
 
 -- ============================================================
 -- SPEND RECORDS
+-- V3: ON DELETE CASCADE folded into FK definitions
 -- ============================================================
 
 CREATE TABLE spend_records
 (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id          UUID REFERENCES intents (id),
-    execution_id       UUID REFERENCES execution_records (id),
-    tenant_id          UUID REFERENCES tenants (id),
-    adapter_id         UUID REFERENCES adapters (id),
+    intent_id          UUID REFERENCES intents (id)           ON DELETE CASCADE,
+    execution_id       UUID REFERENCES execution_records (id) ON DELETE CASCADE,
+    tenant_id          UUID REFERENCES tenants (id)           ON DELETE CASCADE,
+    adapter_id         UUID REFERENCES adapters (id)          ON DELETE SET NULL,
     amount_usd         NUMERIC(12, 6),
     token_count        INT              DEFAULT 0,
     budget_ceiling_usd NUMERIC(12, 6),
     recorded_at        TIMESTAMPTZ      DEFAULT now()
 );
 
-CREATE INDEX idx_spend_tenant_time ON spend_records (tenant_id, recorded_at DESC);
+CREATE INDEX idx_spend_tenant_time   ON spend_records (tenant_id, recorded_at DESC);
 CREATE INDEX idx_spend_adapter_tenant ON spend_records (adapter_id, tenant_id);
-CREATE INDEX idx_spend_intent ON spend_records (intent_id);
-CREATE INDEX idx_spend_tenant ON spend_records (tenant_id);
+CREATE INDEX idx_spend_intent        ON spend_records (intent_id);
+CREATE INDEX idx_spend_tenant        ON spend_records (tenant_id);
 
 -- ============================================================
 -- SLA / DRIFT
+-- V3: ON DELETE CASCADE folded into FK definitions
 -- ============================================================
 
 CREATE TABLE sla_windows
 (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id   UUID REFERENCES intents (id),
-    tenant_id   UUID REFERENCES tenants (id),
+    intent_id   UUID REFERENCES intents (id) ON DELETE CASCADE,
+    tenant_id   UUID REFERENCES tenants (id) ON DELETE CASCADE,
     deadline_ms BIGINT
 );
 
 CREATE TABLE intent_drift_evaluations
 (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    intent_id    UUID REFERENCES intents (id),
-    execution_id UUID REFERENCES execution_records (id),
-    tenant_id    UUID REFERENCES tenants (id),
+    intent_id    UUID REFERENCES intents (id)           ON DELETE CASCADE,
+    execution_id UUID REFERENCES execution_records (id) ON DELETE CASCADE,
+    tenant_id    UUID REFERENCES tenants (id)           ON DELETE CASCADE,
     drift_score  NUMERIC(5, 4)
 );
 
 -- ============================================================
 -- POLICIES
+-- V3: ON DELETE CASCADE folded into FK definitions
 -- ============================================================
 
 CREATE TABLE policies
 (
     id               UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
-    tenant_id        UUID REFERENCES tenants (id),
+    tenant_id        UUID REFERENCES tenants (id) ON DELETE CASCADE,
     name             VARCHAR(255),
     description      TEXT,
     scope            VARCHAR(50)  NOT NULL DEFAULT 'TENANT',
@@ -412,15 +438,15 @@ CREATE TABLE policies
 );
 
 CREATE INDEX idx_policies_tenant ON policies (tenant_id);
-CREATE INDEX idx_policies_phase ON policies (tenant_id, phase, is_active);
+CREATE INDEX idx_policies_phase  ON policies (tenant_id, phase, is_active);
 
 CREATE TABLE policy_evaluations
 (
     id               UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
-    intent_id        UUID REFERENCES intents (id),
-    policy_id        UUID REFERENCES policies (id),
-    tenant_id        UUID REFERENCES tenants (id),
-    adapter_id       UUID REFERENCES adapters (id),
+    intent_id        UUID REFERENCES intents (id)   ON DELETE CASCADE,
+    policy_id        UUID REFERENCES policies (id)  ON DELETE CASCADE,
+    tenant_id        UUID REFERENCES tenants (id)   ON DELETE CASCADE,
+    adapter_id       UUID REFERENCES adapters (id)  ON DELETE SET NULL,
     result           VARCHAR(50),
     phase            VARCHAR(50) NOT NULL DEFAULT 'PRE_EXECUTION',
     enforcement_mode VARCHAR(50) NOT NULL DEFAULT 'LOG_ONLY',
@@ -434,15 +460,14 @@ CREATE INDEX idx_poleval_intent ON policy_evaluations (intent_id);
 CREATE INDEX idx_poleval_tenant ON policy_evaluations (tenant_id);
 
 -- ============================================================
--- LEARNING / ADAPTER PERFORMANCE
--- EMA columns as float(53) to match Hibernate ALTER statements.
+-- ADAPTER PERFORMANCE PROFILES
 -- ============================================================
 
 CREATE TABLE adapter_performance_profiles
 (
     id                   UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
-    adapter_id           UUID        NOT NULL REFERENCES adapters (id),
-    tenant_id            UUID        NOT NULL REFERENCES tenants (id),
+    adapter_id           UUID        NOT NULL REFERENCES adapters (id) ON DELETE CASCADE,
+    tenant_id            UUID        NOT NULL REFERENCES tenants (id)  ON DELETE CASCADE,
     ema_cost             float(53)   NOT NULL DEFAULT 0,
     ema_latency_ms       float(53)   NOT NULL DEFAULT 0,
     ema_success_rate     float(53)   NOT NULL DEFAULT 1,
@@ -461,23 +486,23 @@ CREATE TABLE adapter_performance_profiles
     version              INT         NOT NULL DEFAULT 0,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+
     CONSTRAINT uq_profile_adapter_tenant UNIQUE (adapter_id, tenant_id)
 );
 
-CREATE INDEX idx_profile_tenant ON adapter_performance_profiles (tenant_id);
+CREATE INDEX idx_profile_tenant    ON adapter_performance_profiles (tenant_id);
 CREATE INDEX idx_profile_composite ON adapter_performance_profiles (tenant_id, composite_score DESC) WHERE is_degraded = FALSE;
-CREATE INDEX idx_profile_degraded ON adapter_performance_profiles (tenant_id, is_degraded) WHERE is_degraded = TRUE;
+CREATE INDEX idx_profile_degraded  ON adapter_performance_profiles (tenant_id, is_degraded) WHERE is_degraded = TRUE;
 
 CREATE TRIGGER trg_profile_updated_at
-    BEFORE UPDATE
-    ON adapter_performance_profiles
+    BEFORE UPDATE ON adapter_performance_profiles
     FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
 
 CREATE TABLE adapter_profile_versions
 (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    profile_id UUID REFERENCES adapter_performance_profiles (id),
-    tenant_id  UUID REFERENCES tenants (id)
+    profile_id UUID REFERENCES adapter_performance_profiles (id) ON DELETE CASCADE,
+    tenant_id  UUID REFERENCES tenants (id) ON DELETE CASCADE
 );
 
 -- ============================================================
@@ -487,18 +512,18 @@ CREATE TABLE adapter_profile_versions
 CREATE TABLE rate_limit_configs
 (
     id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID REFERENCES tenants (id)
+    tenant_id UUID REFERENCES tenants (id) ON DELETE CASCADE
 );
 
 CREATE TABLE rate_limit_counters
 (
     id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    config_id UUID REFERENCES rate_limit_configs (id),
-    tenant_id UUID REFERENCES tenants (id)
+    config_id UUID REFERENCES rate_limit_configs (id) ON DELETE CASCADE,
+    tenant_id UUID REFERENCES tenants (id)            ON DELETE CASCADE
 );
 
 -- ============================================================
--- INTENT EVENTS (immutable)
+-- INTENT EVENTS (immutable append-only)
 -- ============================================================
 
 CREATE TABLE intent_events
@@ -506,7 +531,7 @@ CREATE TABLE intent_events
     id                   UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
     event_id             UUID         NOT NULL,
     intent_id            UUID         NOT NULL,
-    tenant_id            UUID         NOT NULL,
+    tenant_id            UUID         NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
     version              BIGINT       NOT NULL,
     event_type           VARCHAR(255) NOT NULL,
     aggregate_type       VARCHAR(255) NOT NULL DEFAULT 'Intent',
@@ -528,25 +553,24 @@ CREATE TABLE intent_events
     trace_id             VARCHAR(64),
     span_id              VARCHAR(64),
     parent_span_id       VARCHAR(64),
+
     CONSTRAINT uq_intent_events_event_id UNIQUE (event_id),
-    CONSTRAINT uq_intent_events_version UNIQUE (intent_id, version)
+    CONSTRAINT uq_intent_events_version  UNIQUE (intent_id, version)
 );
 
-CREATE INDEX idx_events_intent ON intent_events (intent_id, occurred_at ASC);
+CREATE INDEX idx_events_intent        ON intent_events (intent_id, occurred_at ASC);
 CREATE INDEX idx_events_intent_version ON intent_events (intent_id, version);
-CREATE INDEX idx_events_tenant_time ON intent_events (tenant_id, occurred_at DESC);
-CREATE INDEX idx_events_tenant ON intent_events (tenant_id);
-CREATE INDEX idx_events_type ON intent_events (tenant_id, event_type, occurred_at DESC);
-CREATE INDEX idx_events_trace ON intent_events (tenant_id, trace_id) WHERE trace_id IS NOT NULL;
+CREATE INDEX idx_events_tenant_time   ON intent_events (tenant_id, occurred_at DESC);
+CREATE INDEX idx_events_tenant        ON intent_events (tenant_id);
+CREATE INDEX idx_events_type          ON intent_events (tenant_id, event_type, occurred_at DESC);
+CREATE INDEX idx_events_trace         ON intent_events (tenant_id, trace_id) WHERE trace_id IS NOT NULL;
 
 CREATE TRIGGER trg_intent_events_no_update
-    BEFORE UPDATE
-    ON intent_events
+    BEFORE UPDATE ON intent_events
     FOR EACH ROW EXECUTE FUNCTION fn_guard_immutable();
 
 CREATE TRIGGER trg_intent_events_no_delete
-    BEFORE DELETE
-    ON intent_events
+    BEFORE DELETE ON intent_events
     FOR EACH ROW EXECUTE FUNCTION fn_guard_immutable();
 
 -- ============================================================
@@ -556,7 +580,7 @@ CREATE TRIGGER trg_intent_events_no_delete
 CREATE TABLE audit_log
 (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id     UUID REFERENCES tenants (id),
+    tenant_id     UUID REFERENCES tenants (id) ON DELETE CASCADE,
     user_id       VARCHAR(255),
     entity_type   VARCHAR(100),
     entity_id     UUID,
@@ -568,9 +592,9 @@ CREATE TABLE audit_log
     occurred_at   TIMESTAMPTZ      DEFAULT now()
 );
 
-CREATE INDEX idx_audit_tenant ON audit_log (tenant_id);
+CREATE INDEX idx_audit_tenant      ON audit_log (tenant_id);
 CREATE INDEX idx_audit_occurred_at ON audit_log (occurred_at DESC);
-CREATE INDEX idx_audit_resource ON audit_log (resource_type, resource_id);
+CREATE INDEX idx_audit_resource    ON audit_log (resource_type, resource_id);
 
 -- ============================================================
 -- IDEMPOTENCY
@@ -579,18 +603,18 @@ CREATE INDEX idx_audit_resource ON audit_log (resource_type, resource_id);
 CREATE TABLE tenant_idempotency
 (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID         NOT NULL REFERENCES tenants (id),
+    tenant_id       UUID         NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
     idempotency_key VARCHAR(255) NOT NULL,
     created_at      TIMESTAMPTZ      DEFAULT now(),
+
     CONSTRAINT uq_tenant_idempotency UNIQUE (tenant_id, idempotency_key)
 );
 
-CREATE INDEX idx_tenant_idempotency_key ON tenant_idempotency (idempotency_key);
+CREATE INDEX idx_tenant_idempotency_key    ON tenant_idempotency (idempotency_key);
 CREATE INDEX idx_tenant_idempotency_tenant ON tenant_idempotency (tenant_id);
 
 -- ============================================================
 -- GOVERNANCE: LEDGER / POLICY SNAPSHOT / PROCESSED EVENTS
--- Column names match Hibernate camelCase mappings from ALTER.
 -- ============================================================
 
 CREATE TABLE ledger_entry
@@ -630,7 +654,6 @@ CREATE INDEX idx_processed_events_event_id ON processed_events (event_id);
 
 -- ============================================================
 -- BILLING
--- Column names match Hibernate camelCase mappings from ALTER.
 -- ============================================================
 
 CREATE TABLE credit_ledger
@@ -643,16 +666,13 @@ CREATE TABLE credit_ledger
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_credit_ledger_org_id ON credit_ledger (org_id);
-CREATE INDEX idx_credit_ledger_created_at ON credit_ledger (created_at);
-CREATE INDEX idx_credit_ledger_reason ON credit_ledger (reason);
+COMMENT ON TABLE  credit_ledger              IS 'Append-only ledger — positive=credit, negative=debit';
+COMMENT ON COLUMN credit_ledger.reason       IS 'REGISTRATION_GIFT|SUBSCRIPTION|PURCHASE|REFERRAL|INTENT_EXECUTION|RETRY|REFUND|ADMIN_ADJUSTMENT';
+COMMENT ON COLUMN credit_ledger.reference_id IS 'intent_id for executions, stripe session_id for purchases';
 
-COMMENT
-ON TABLE  credit_ledger              IS 'Append-only ledger — positive=credit, negative=debit';
-COMMENT
-ON COLUMN credit_ledger.reason       IS 'REGISTRATION_GIFT|SUBSCRIPTION|PURCHASE|REFERRAL|INTENT_EXECUTION|RETRY|REFUND|ADMIN_ADJUSTMENT';
-COMMENT
-ON COLUMN credit_ledger.reference_id IS 'intent_id for executions, stripe session_id for purchases';
+CREATE INDEX idx_credit_ledger_org_id     ON credit_ledger (org_id);
+CREATE INDEX idx_credit_ledger_created_at ON credit_ledger (created_at);
+CREATE INDEX idx_credit_ledger_reason     ON credit_ledger (reason);
 
 CREATE TABLE subscription
 (
@@ -666,7 +686,7 @@ CREATE TABLE subscription
     updatedAt            TIMESTAMPTZ(6)
 );
 
-CREATE INDEX idx_subscription_org_id ON subscription (orgId);
+CREATE INDEX idx_subscription_org_id     ON subscription (orgId);
 CREATE INDEX idx_subscription_stripe_sub ON subscription (stripeSubscriptionId);
 
 CREATE TABLE billing_customer
@@ -674,6 +694,7 @@ CREATE TABLE billing_customer
     org_id           UUID PRIMARY KEY,
     orgId            UUID,
     stripeCustomerId VARCHAR(255),
+
     CONSTRAINT UKf8ybrcbugt66p970i9lmseiaq UNIQUE (stripeCustomerId)
 );
 
@@ -713,7 +734,7 @@ CREATE TABLE intent_evaluations
 );
 
 -- ============================================================
--- EVENTSOURCING / OUTBOX / MULTI-REGION / PORTFOLIO
+-- EVENTSOURCING / OUTBOX / MULTI-REGION
 -- ============================================================
 
 CREATE TABLE event_outbox
@@ -787,6 +808,202 @@ CREATE TABLE exploration_ledger
     confidence  DOUBLE PRECISION NOT NULL,
     timestamp   TIMESTAMPTZ      NOT NULL
 );
+
+-- ============================================================
+-- AUDIT TRIGGERS  (V2)
+--
+-- Write to audit_log automatically on INSERT/UPDATE/DELETE
+-- for intents, api_keys, policies, adapters.
+--
+-- User identity: app sets current_setting('app.current_user_id')
+-- on each connection before writes. Falls back to NULL gracefully.
+--   SET LOCAL "app.current_user_id" = '<user-uuid>';
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION fn_current_audit_user()
+    RETURNS VARCHAR(255) LANGUAGE plpgsql AS
+$$
+BEGIN
+RETURN current_setting('app.current_user_id', TRUE); -- TRUE = missing_ok
+EXCEPTION
+    WHEN OTHERS THEN RETURN NULL;
+END;
+$$;
+
+-- ── INTENTS ──────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION fn_audit_intents()
+    RETURNS TRIGGER LANGUAGE plpgsql AS
+$$
+DECLARE
+v_action VARCHAR(100);
+    v_detail TEXT;
+    v_uid    VARCHAR(255);
+BEGIN
+    v_uid := COALESCE(fn_current_audit_user(), NEW.user_id::TEXT);
+
+    IF TG_OP = 'INSERT' THEN
+        v_action := 'INTENT_SUBMITTED';
+        v_detail := 'type=' || NEW.intent_type || ' phase=' || NEW.phase;
+
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.terminal = TRUE AND OLD.terminal = FALSE THEN
+            v_action := CASE NEW.satisfaction_state
+                            WHEN 'SATISFIED' THEN 'INTENT_SATISFIED'
+                            WHEN 'VIOLATED'  THEN 'INTENT_VIOLATED'
+                            ELSE                  'INTENT_COMPLETED'
+END;
+            v_detail := 'phase=' || NEW.phase
+                || ' satisfaction=' || NEW.satisfaction_state
+                || ' retries='      || NEW.retry_count;
+        ELSIF NEW.phase IS DISTINCT FROM OLD.phase THEN
+            v_action := 'INTENT_PHASE_CHANGED';
+            v_detail := 'from=' || COALESCE(OLD.phase, '—') || ' to=' || NEW.phase;
+ELSE
+            RETURN NEW; -- uninteresting update — skip
+END IF;
+
+    ELSIF TG_OP = 'DELETE' THEN
+        v_uid    := COALESCE(fn_current_audit_user(), OLD.user_id::TEXT);
+        v_action := 'INTENT_DELETED';
+        v_detail := 'type=' || OLD.intent_type || ' phase=' || OLD.phase;
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (OLD.tenant_id, v_uid, 'INTENT', OLD.id, v_action, v_detail);
+RETURN OLD;
+END IF;
+
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (NEW.tenant_id, v_uid, 'INTENT', NEW.id, v_action, v_detail);
+RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_audit_intents
+    AFTER INSERT OR UPDATE OR DELETE ON intents
+    FOR EACH ROW EXECUTE FUNCTION fn_audit_intents();
+
+-- ── API KEYS ─────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION fn_audit_api_keys()
+    RETURNS TRIGGER LANGUAGE plpgsql AS
+$$
+DECLARE
+v_action VARCHAR(100);
+    v_detail TEXT;
+    v_uid    VARCHAR(255);
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        v_uid    := COALESCE(fn_current_audit_user(), OLD.created_by_user_id::TEXT);
+        v_action := 'API_KEY_DELETED';
+        v_detail := 'prefix=' || OLD.key_prefix || ' name=' || COALESCE(OLD.name, '—');
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (OLD.tenant_id, v_uid, 'API_KEY', OLD.key_id, v_action, v_detail);
+RETURN OLD;
+END IF;
+
+    v_uid := COALESCE(fn_current_audit_user(), NEW.created_by_user_id::TEXT);
+
+    IF TG_OP = 'INSERT' THEN
+        v_action := 'API_KEY_CREATED';
+        v_detail := 'prefix=' || NEW.key_prefix
+            || ' name='  || COALESCE(NEW.name, '—')
+            || ' scopes=' || COALESCE(NEW.scopes::TEXT, '[]');
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.revoked_at IS NOT NULL AND OLD.revoked_at IS NULL THEN
+            v_action := 'API_KEY_REVOKED';
+            v_detail := 'prefix=' || NEW.key_prefix || ' name=' || COALESCE(NEW.name, '—');
+ELSE
+            RETURN NEW; -- usage_count / last_used_at update — skip
+END IF;
+END IF;
+
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (NEW.tenant_id, v_uid, 'API_KEY', NEW.key_id, v_action, v_detail);
+RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_audit_api_keys
+    AFTER INSERT OR UPDATE OR DELETE ON api_keys
+    FOR EACH ROW EXECUTE FUNCTION fn_audit_api_keys();
+
+-- ── POLICIES ─────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION fn_audit_policies()
+    RETURNS TRIGGER LANGUAGE plpgsql AS
+$$
+DECLARE
+v_action VARCHAR(100);
+    v_detail TEXT;
+    v_uid    VARCHAR(255);
+BEGIN
+    v_uid := fn_current_audit_user();
+
+    IF TG_OP = 'DELETE' THEN
+        v_action := 'POLICY_DELETED';
+        v_detail := 'name=' || COALESCE(OLD.name, '—') || ' phase=' || OLD.phase;
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (OLD.tenant_id, v_uid, 'POLICY', OLD.id, v_action, v_detail);
+RETURN OLD;
+END IF;
+
+    v_action := CASE TG_OP WHEN 'INSERT' THEN 'POLICY_CREATED' ELSE 'POLICY_UPDATED' END;
+    v_detail := 'name=' || COALESCE(NEW.name, '—')
+        || ' phase='       || NEW.phase
+        || ' enforcement=' || NEW.enforcement_mode;
+
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (NEW.tenant_id, v_uid, 'POLICY', NEW.id, v_action, v_detail);
+RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_audit_policies
+    AFTER INSERT OR UPDATE OR DELETE ON policies
+    FOR EACH ROW EXECUTE FUNCTION fn_audit_policies();
+
+-- ── ADAPTERS ─────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION fn_audit_adapters()
+    RETURNS TRIGGER LANGUAGE plpgsql AS
+$$
+DECLARE
+v_action VARCHAR(100);
+    v_detail TEXT;
+    v_uid    VARCHAR(255);
+BEGIN
+    v_uid := fn_current_audit_user();
+
+    IF TG_OP = 'DELETE' THEN
+        v_action := 'ADAPTER_DELETED';
+        v_detail := 'name=' || OLD.name || ' provider=' || COALESCE(OLD.provider, '—');
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (OLD.tenant_id, v_uid, 'ADAPTER', OLD.id, v_action, v_detail);
+RETURN OLD;
+END IF;
+
+    IF TG_OP = 'UPDATE' AND NEW.is_active IS DISTINCT FROM OLD.is_active THEN
+        v_action := CASE WHEN NEW.is_active THEN 'ADAPTER_ENABLED' ELSE 'ADAPTER_DISABLED' END;
+    ELSIF TG_OP = 'INSERT' THEN
+        v_action := 'ADAPTER_CREATED';
+ELSE
+        v_action := 'ADAPTER_UPDATED';
+END IF;
+
+    v_detail := 'name='    || NEW.name
+        || ' provider='    || COALESCE(NEW.provider, '—')
+        || ' model='       || COALESCE(NEW.model_id, '—')
+        || ' active='      || NEW.is_active;
+
+INSERT INTO audit_log (tenant_id, user_id, entity_type, entity_id, action, detail)
+VALUES (NEW.tenant_id, v_uid, 'ADAPTER', NEW.id, v_action, v_detail);
+RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_audit_adapters
+    AFTER INSERT OR UPDATE OR DELETE ON adapters
+    FOR EACH ROW EXECUTE FUNCTION fn_audit_adapters();
 
 -- ============================================================
 -- DONE

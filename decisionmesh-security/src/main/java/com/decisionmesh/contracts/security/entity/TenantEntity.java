@@ -33,13 +33,12 @@ public class TenantEntity extends PanacheEntityBase {
     @Column(name = "name", nullable = false, length = 255)
     public String name;
 
-    /**
-     * organizationId is a denormalised convenience column — the canonical
-     * relationship is through the organizations table. May be null for
-     * root/system tenants that are not scoped to a specific organization.
-     */
-    @Column(name = "organization_id")
-    public UUID organizationId;
+    @Column(name = "account_type", length = 20)
+    public String accountType;       // "INDIVIDUAL" | "ORGANIZATION"
+
+    @Column(name = "keycloak_group_id", length = 100)
+    public String keycloakGroupId;
+
 
     @Column(name = "status", nullable = false, length = 50)
     public String status = "ACTIVE";
@@ -61,6 +60,7 @@ public class TenantEntity extends PanacheEntityBase {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     public OffsetDateTime updatedAt;
+
 
     // ── Reactive finders ──────────────────────────────────────────────────────
 

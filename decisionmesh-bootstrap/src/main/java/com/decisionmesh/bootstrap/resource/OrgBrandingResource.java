@@ -5,6 +5,7 @@ import com.decisionmesh.persistence.repository.OrgRepository;
 import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.quarkus.security.Authenticated;
 import io.smallrye.mutiny.Uni;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -31,6 +32,7 @@ public class OrgBrandingResource {
     @PATCH
     @Path("/branding")
     @WithTransaction
+    @RolesAllowed({"sys_admin", "tenant_user"})
     public Uni<Response> updateBranding(BrandingRequest dto) {
 
         return getTenantId()
@@ -46,6 +48,7 @@ public class OrgBrandingResource {
     @GET
     @Path("/branding")
     @WithTransaction
+    @RolesAllowed({"sys_admin", "tenant_user"})
     public Uni<Response> getBranding() {
 
         return getTenantId()

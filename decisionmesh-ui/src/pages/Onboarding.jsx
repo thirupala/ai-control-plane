@@ -5,8 +5,6 @@ import { Card, CardHeader, CardTitle, CardContent, Button } from '../components/
 import { useBranding } from '../context/BrandingContext';
 import { request } from '../utils/api';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080/api';
-
 const PRESET_COLORS = [
   { name: 'Blue',    value: '#2563eb' },
   { name: 'Indigo',  value: '#4f46e5' },
@@ -42,7 +40,7 @@ export default function OrgBranding({ keycloak }) {
     try {
       const formData = new FormData();
       formData.append('logo', file);
-      const res = await fetch(`${API_BASE}/org/branding/logo`, {
+      const res = await fetch('http://localhost:8080/api/org/branding/logo', {
         method:  'POST',
         headers: { Authorization: `Bearer ${keycloak?.token}` },
         body:    formData,
@@ -61,49 +59,10 @@ export default function OrgBranding({ keycloak }) {
     }
   }
 
-  // ── Color selection — live preview only ─────────────────────────────────────
+  // ── Color selection — live preview only, not saved yet ──────────────────────
   function handleColorSelect(color) {
     setForm(f => ({ ...f, primaryColor: color }));
-    updateBranding({ primaryColor: color }); // instant DOM preview
-  }
-
-  // ── Reload branding from backend and apply to DOM ───────────────────────────
-  // Called after every successful save to confirm what was persisted
-  // and apply the exact values returned by the backend.
-  async function reloadBrandingFromBackend() {
-    try {
-      await keycloak.updateToken(30).catch(() => {});
-
-      const res = await fetch(`${API_BASE}/org/branding`, {
-        headers: {
-          'Authorization': `Bearer ${keycloak.token}`,
-          'Content-Type':  'application/json',
-        },
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        console.log('[Branding] reloaded after save:', JSON.stringify(data));
-
-        // Normalize — handles both camelCase and snake_case from backend
-        const normalized = {
-          primaryColor: data.primaryColor ?? data.primary_color ?? form.primaryColor,
-          orgName:      data.orgName      ?? data.org_name      ?? form.orgName,
-          logoUrl:      data.logoUrl      ?? data.logo_url      ?? null,
-          favicon:      data.favicon      ?? null,
-        };
-
-        // Update context + apply to DOM
-        updateBranding(normalized);
-
-        // Sync local form state with what backend confirmed
-        setForm(f => ({ ...f, ...normalized }));
-      } else {
-        console.error('[Branding] reload after save failed: HTTP', res.status);
-      }
-    } catch (err) {
-      console.error('[Branding] reload exception:', err.message);
-    }
+    updateBranding({ primaryColor: color }); // instant DOM update for preview
   }
 
   // ── Save ────────────────────────────────────────────────────────────────────
@@ -111,19 +70,14 @@ export default function OrgBranding({ keycloak }) {
     setError('');
     setSaving(true);
     try {
-      // PATCH to save
+      // Use request() helper — handles token refresh + throws on non-2xx
       await request(keycloak, '/org/branding', {
         method: 'PATCH',
         body:   JSON.stringify(form),
       });
 
-      // ── GET to reload saved data and apply to DOM ─────────────────────────
-      // Without this, the color is only applied locally from form state.
-      // After reload the page it would not persist because BrandingContext
-      // GET happens on mount — before the save. Reloading here ensures the
-      // backend-confirmed values are applied immediately after save.
-      await reloadBrandingFromBackend();
-
+      // Only apply to DOM and mark saved if API succeeded
+      updateBranding(form);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
 
@@ -131,7 +85,8 @@ export default function OrgBranding({ keycloak }) {
       const msg = err?.message || 'Failed to save branding';
       setError(msg);
       console.error('[OrgBranding] save failed:', msg);
-      // Revert to last saved branding on failure
+
+      // Revert DOM back to last successfully saved branding
       updateBranding(branding);
       setForm({
         orgName:      branding.orgName,
@@ -143,7 +98,7 @@ export default function OrgBranding({ keycloak }) {
     }
   }
 
-  // ── Reset ───────────────────────────────────────────────────────────────────
+  // ── Reset to defaults ───────────────────────────────────────────────────────
   function handleReset() {
     const defaults = { orgName: 'DecisionMesh', primaryColor: '#2563eb', logoUrl: null };
     setForm(defaults);
@@ -157,7 +112,7 @@ export default function OrgBranding({ keycloak }) {
     <Page title="Organisation branding" subtitle="Customise how your organisation appears in the control plane">
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
-        {/* ── Settings ───────────────────────────────────────────────────── */}
+        {/* ── Settings panel ─────────────────────────────────────────────── */}
         <div className="xl:col-span-2 space-y-5">
 
           {/* Logo */}
@@ -177,9 +132,21 @@ export default function OrgBranding({ keycloak }) {
                   }
                 </div>
                 <div className="space-y-2">
-                  <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
-                  <Button variant="secondary" size="sm" loading={uploading} onClick={() => fileRef.current?.click()}>
-                    <Upload size={13} /> {preview ? 'Change logo' : 'Upload logo'}
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleLogoChange}
+                  />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={uploading}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    <Upload size={13} />
+                    {preview ? 'Change logo' : 'Upload logo'}
                   </Button>
                   {preview && (
                     <button
@@ -227,6 +194,8 @@ export default function OrgBranding({ keycloak }) {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+
+              {/* Preset swatches */}
               <div>
                 <p className="text-xs font-medium text-slate-600 mb-3">Preset colours</p>
                 <div className="flex flex-wrap gap-2.5">
@@ -247,6 +216,7 @@ export default function OrgBranding({ keycloak }) {
                 </div>
               </div>
 
+              {/* Custom colour picker */}
               <div>
                 <p className="text-xs font-medium text-slate-600 mb-2">Custom colour</p>
                 <div className="flex items-center gap-3">
@@ -270,14 +240,16 @@ export default function OrgBranding({ keycloak }) {
                       focus:outline-none focus:ring-2 focus:ring-blue-500"
                     style={{ fontFamily: "'JetBrains Mono', monospace" }}
                   />
-                  <div className="flex-1 h-8 rounded-lg border border-slate-100"
-                    style={{ background: form.primaryColor }} />
+                  <div
+                    className="flex-1 h-8 rounded-lg border border-slate-100"
+                    style={{ background: form.primaryColor }}
+                  />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Error */}
+          {/* Error message */}
           {error && (
             <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-100">
               <p className="text-sm text-red-600">{error}</p>
@@ -295,17 +267,21 @@ export default function OrgBranding({ keycloak }) {
           </div>
         </div>
 
-        {/* ── Live preview ────────────────────────────────────────────────── */}
+        {/* ── Live preview panel ──────────────────────────────────────────── */}
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
             <Eye size={12} /> Live preview
           </p>
           <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
             <div className="flex h-64" style={{ background: '#f8fafc' }}>
+
+              {/* Mini sidebar */}
               <div className="w-40 bg-white border-r border-slate-100 flex flex-col">
                 <div className="flex items-center gap-2 px-3 py-3 border-b border-slate-100">
-                  <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 overflow-hidden"
-                    style={{ backgroundColor: form.primaryColor }}>
+                  <div
+                    className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 overflow-hidden"
+                    style={{ backgroundColor: form.primaryColor }}
+                  >
                     {preview
                       ? <img src={preview} className="w-full h-full object-contain" alt="" />
                       : <span className="text-white text-[10px] font-bold">{initial}</span>
@@ -316,57 +292,77 @@ export default function OrgBranding({ keycloak }) {
                   </span>
                 </div>
                 {['Dashboard', 'Intents', 'Adapters', 'Policies', 'Audit'].map((item, i) => (
-                  <div key={item} className="flex items-center gap-2 mx-1.5 px-2 py-1.5 rounded-md my-0.5"
-                    style={i === 0 ? { backgroundColor: `${form.primaryColor}18` } : {}}>
-                    <div className="w-2.5 h-2.5 rounded-sm shrink-0"
-                      style={{ backgroundColor: i === 0 ? form.primaryColor : '#cbd5e1' }} />
-                    <span className="text-[10px] font-medium"
-                      style={{ color: i === 0 ? form.primaryColor : '#64748b' }}>{item}</span>
+                  <div
+                    key={item}
+                    className="flex items-center gap-2 mx-1.5 px-2 py-1.5 rounded-md my-0.5"
+                    style={i === 0 ? { backgroundColor: `${form.primaryColor}18` } : {}}
+                  >
+                    <div
+                      className="w-2.5 h-2.5 rounded-sm shrink-0"
+                      style={{ backgroundColor: i === 0 ? form.primaryColor : '#cbd5e1' }}
+                    />
+                    <span
+                      className="text-[10px] font-medium"
+                      style={{ color: i === 0 ? form.primaryColor : '#64748b' }}
+                    >
+                      {item}
+                    </span>
                   </div>
                 ))}
               </div>
+
+              {/* Mini main area */}
               <div className="flex-1 p-3 space-y-2">
                 <div className="flex items-center justify-between bg-white rounded-lg px-3 py-1.5 border border-slate-100">
                   <span className="text-[10px] font-medium text-slate-700">Dashboard</span>
-                  <div className="w-5 h-5 rounded-full shrink-0"
-                    style={{ backgroundColor: form.primaryColor, opacity: 0.8 }} />
+                  <div
+                    className="w-5 h-5 rounded-full shrink-0"
+                    style={{ backgroundColor: form.primaryColor, opacity: 0.8 }}
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {['Intents', 'Cost', 'Success', 'Drift'].map(label => (
                     <div key={label} className="bg-white rounded-lg p-2 border border-slate-100">
-                      <div className="w-4 h-1 rounded-full mb-1.5"
-                        style={{ backgroundColor: form.primaryColor, opacity: 0.3 }} />
+                      <div
+                        className="w-4 h-1 rounded-full mb-1.5"
+                        style={{ backgroundColor: form.primaryColor, opacity: 0.3 }}
+                      />
                       <div className="text-[10px] font-bold text-slate-700">—</div>
                       <div className="text-[9px] text-slate-400">{label}</div>
                     </div>
                   ))}
                 </div>
                 <div className="flex gap-1">
-                  <div className="px-2 py-0.5 rounded text-[9px] font-semibold text-white"
-                    style={{ backgroundColor: form.primaryColor }}>Primary</div>
+                  <div
+                    className="px-2 py-0.5 rounded text-[9px] font-semibold text-white"
+                    style={{ backgroundColor: form.primaryColor }}
+                  >
+                    Primary
+                  </div>
                   <div className="px-2 py-0.5 rounded text-[9px] font-medium text-slate-600 border border-slate-200 bg-white">
-                    Secondary</div>
+                    Secondary
+                  </div>
                 </div>
               </div>
             </div>
           </div>
+
           <div className="mt-3 space-y-1.5 text-xs text-slate-500">
             <p className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: form.primaryColor }} />
               Active nav highlight
             </p>
             <p className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full shrink-0"
-                style={{ backgroundColor: form.primaryColor, opacity: 0.3 }} />
+              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: form.primaryColor, opacity: 0.3 }} />
               Metric card accents
             </p>
             <p className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full shrink-0"
-                style={{ backgroundColor: form.primaryColor, opacity: 0.15 }} />
+              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: form.primaryColor, opacity: 0.15 }} />
               Focus rings, badges
             </p>
           </div>
         </div>
+
       </div>
     </Page>
   );

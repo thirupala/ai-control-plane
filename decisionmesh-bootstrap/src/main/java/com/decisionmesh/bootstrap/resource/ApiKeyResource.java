@@ -47,7 +47,7 @@ public class ApiKeyResource {
     @POST
     @WithTransaction
     @NonBlocking
-    @RolesAllowed({"sys_admin", "tenant_admin"})
+    @RolesAllowed({"sys_admin", "tenant_user"})
     public Uni<ApiKeyCreatedDto> create(CreateKeyRequest body) {
         if (body == null || body.name == null || body.name.isBlank())
             throw new BadRequestException("Key name is required");
@@ -93,7 +93,7 @@ public class ApiKeyResource {
     }
 
     private UUID userId() {
-        String uid = jwt.getClaim("userId");
+        String uid = jwt.getClaim("sub");
         if (uid == null || uid.isBlank()) throw new ForbiddenException("Missing userId in token");
         try { return UUID.fromString(uid); }
         catch (IllegalArgumentException e) { throw new BadRequestException("Invalid userId format"); }

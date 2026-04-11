@@ -31,20 +31,29 @@ function hexToHsl(hex) {
 }
 
 function applyBrandingToDOM(branding) {
+  const color = branding.primaryColor || DEFAULT_BRANDING.primaryColor;
+
+  // Guard — only apply valid 6-digit hex colors
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
+
   const root = document.documentElement;
-  const [h, s, l] = hexToHsl(branding.primaryColor || DEFAULT_BRANDING.primaryColor);
+  const [h, s, l] = hexToHsl(color);
 
   root.style.setProperty('--brand-h',       h);
   root.style.setProperty('--brand-s',       `${s}%`);
   root.style.setProperty('--brand-l',       `${l}%`);
-  root.style.setProperty('--brand-primary', branding.primaryColor);
+  root.style.setProperty('--brand-primary', color);
   root.style.setProperty('--brand-light',   `hsl(${h}, ${s}%, ${Math.min(l + 40, 95)}%)`);
   root.style.setProperty('--brand-dark',    `hsl(${h}, ${s}%, ${Math.max(l - 10, 10)}%)`);
   root.style.setProperty('--brand-text',    `hsl(${h}, ${Math.min(s + 10, 100)}%, ${Math.max(l - 20, 15)}%)`);
 
   if (branding.favicon) {
     let link = document.querySelector("link[rel~='icon']");
-    if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
     link.href = branding.favicon;
   }
 
@@ -57,29 +66,70 @@ export function BrandingProvider({ keycloak, children }) {
   const [branding, setBranding] = useState(DEFAULT_BRANDING);
   const [loading,  setLoading]  = useState(true);
 
+  // BrandingContext.jsx — replace the useEffect
   useEffect(() => {
-    // Apply defaults immediately so the UI renders branded from the start.
     applyBrandingToDOM(DEFAULT_BRANDING);
 
-    if (!keycloak?.authenticated) { setLoading(false); return; }
-
-    const parsed = keycloak.tokenParsed;
-    if (!parsed?.tenantId) {
+    if (!keycloak?.authenticated) {
       setLoading(false);
       return;
     }
-    getOrgBranding(keycloak)
-        .then(data => {
-          if (data) {
-            const merged = { ...DEFAULT_BRANDING, ...data };
-            setBranding(merged);
-            applyBrandingToDOM(merged);
-          }
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false));
 
-  }, [keycloak?.authenticated, keycloak?.tokenParsed?.tenantId]);
+    // ── Wait for token to be available ────────────────────────────────────
+    // request() silently returns null if token is missing — no network call made.
+    // We use a direct fetch here so we always know exactly what's happening.
+    const loadBranding = async () => {
+      try {
+        // Ensure fresh token
+        await keycloak.updateToken(30).catch(() => {});
+
+        const token = keycloak.token;
+        if (!token) {
+          console.warn('[Branding] token still missing after refresh');
+          setLoading(false);
+          return;
+        }
+
+        console.log('[Branding] fetching branding with token:', token.substring(0, 20) + '...');
+
+        const res = await fetch('http://localhost:8080/api/org/branding', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type':  'application/json',
+          }
+        });
+
+        console.log('[Branding] GET /api/org/branding status:', res.status);
+
+        if (res.ok) {
+          const data = await res.json();
+          console.log('[Branding] raw response:', JSON.stringify(data));
+
+          // Normalize — handles both camelCase and snake_case from backend
+          const normalized = {
+            primaryColor: data.primaryColor ?? data.primary_color ?? DEFAULT_BRANDING.primaryColor,
+            orgName:      data.orgName      ?? data.org_name      ?? DEFAULT_BRANDING.orgName,
+            logoUrl:      data.logoUrl      ?? data.logo_url      ?? null,
+            favicon:      data.favicon      ?? null,
+          };
+
+          console.log('[Branding] applying primaryColor:', normalized.primaryColor);
+          const merged = { ...DEFAULT_BRANDING, ...normalized };
+          setBranding(merged);
+          applyBrandingToDOM(merged);
+        } else {
+          console.error('[Branding] GET failed:', res.status, await res.text());
+        }
+      } catch (err) {
+        console.error('[Branding] exception:', err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadBranding();
+
+  }, [keycloak?.authenticated]);
 
   function updateBranding(updates) {
     const merged = { ...branding, ...updates };
@@ -88,9 +138,9 @@ export function BrandingProvider({ keycloak, children }) {
   }
 
   return (
-    <BrandingContext.Provider value={{ branding, updateBranding, loading }}>
-      {children}
-    </BrandingContext.Provider>
+      <BrandingContext.Provider value={{ branding, updateBranding, loading }}>
+        {children}
+      </BrandingContext.Provider>
   );
 }
 

@@ -56,7 +56,7 @@ public class TenantContextFilter implements ContainerRequestFilter {
         // OidcTenantAugmentor deleted — read claims directly from JWT
         if (tenantId == null) {
             String tidClaim = jwt.getClaim("tenantId");
-            String uidClaim = jwt.getClaim("userId");
+            String uidClaim = jwt.getClaim("sub");
             if (tidClaim != null && !tidClaim.isBlank()) {
                 try {
                     tenantId = UUID.fromString(tidClaim);

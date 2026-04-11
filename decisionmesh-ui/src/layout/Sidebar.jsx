@@ -35,9 +35,6 @@ const ENV_DOTS = {
   Dev:        'bg-blue-500',
 };
 
-// Fix: previously navigated to '/billing' — now goes to '/billing?tab=credits'
-// so the user lands directly on the credit top-up tab, consistent with the
-// banner and TopBar pill.
 function CreditFooter() {
   const navigate = useNavigate();
   const { balance, allocated, statusColor, isEmpty, isLow } = useCredits();
@@ -72,8 +69,6 @@ function ProjectSwitcher() {
   const { org, projects, activeProject, switchProject, loading } = useProject();
   const [open, setOpen] = useState(false);
 
-  // Render nothing while data is in-flight so the user never sees the
-  // "My Organisation / Default Project" placeholders snap to real values.
   if (loading) return <div className="h-12 border-b border-slate-100" />;
 
   function handleSwitch(project) {
@@ -83,12 +78,15 @@ function ProjectSwitcher() {
 
   return (
     <div className="relative px-2 pb-2 border-b border-slate-100">
-      {/* Trigger */}
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-slate-50 transition-colors text-left"
       >
-        <div className="w-6 h-6 rounded-md bg-blue-600 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+        {/* ✅ org initial — was bg-blue-600, now uses CSS variable */}
+        <div
+          className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+          style={{ backgroundColor: 'var(--brand-primary)' }}
+        >
           {org.name?.[0]?.toUpperCase() ?? 'O'}
         </div>
         <div className="flex-1 min-w-0">
@@ -101,7 +99,6 @@ function ProjectSwitcher() {
         <ChevronDown size={12} className={`text-slate-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      {/* Dropdown */}
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
@@ -117,20 +114,27 @@ function ProjectSwitcher() {
                 >
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ENV_DOTS[p.environment] ?? 'bg-slate-400'}`} />
                   <span className="flex-1 text-sm text-slate-700 truncate">{p.name}</span>
-                  {p.id === activeProject?.id && <Check size={12} className="text-blue-600 shrink-0" />}
+                  {/* ✅ check icon — was text-blue-600, now CSS variable */}
+                  {p.id === activeProject?.id && (
+                    <Check size={12} className="shrink-0" style={{ color: 'var(--brand-primary)' }} />
+                  )}
                 </button>
               ))}
             </div>
             <div className="border-t border-slate-100 py-1">
               <button
                 onClick={() => { setOpen(false); navigate('/projects'); }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-500 hover:bg-slate-50 hover:text-blue-600 transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-500 hover:bg-slate-50 transition-colors"
+                onMouseEnter={e => e.currentTarget.style.color = 'var(--brand-primary)'}
+                onMouseLeave={e => e.currentTarget.style.color = ''}
               >
                 <FolderOpen size={12} /> Manage projects
               </button>
               <button
                 onClick={() => { setOpen(false); navigate('/projects?new=1'); }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-500 hover:bg-slate-50 hover:text-blue-600 transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-500 hover:bg-slate-50 transition-colors"
+                onMouseEnter={e => e.currentTarget.style.color = 'var(--brand-primary)'}
+                onMouseLeave={e => e.currentTarget.style.color = ''}
               >
                 <Plus size={12} /> New project
               </button>
@@ -153,7 +157,11 @@ export default function Sidebar({ collapsed, onToggle, onHide }) {
         'flex items-center border-b border-slate-100 shrink-0',
         collapsed ? 'justify-center px-0 py-4' : 'px-3 py-4 gap-2'
       )}>
-        <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-blue-600 shrink-0">
+        {/* ✅ Logo icon — was bg-blue-600, now CSS variable */}
+        <div
+          className="flex items-center justify-center w-7 h-7 rounded-lg shrink-0"
+          style={{ backgroundColor: 'var(--brand-primary)' }}
+        >
           <Zap size={14} className="text-white" />
         </div>
         {!collapsed && (
@@ -172,7 +180,7 @@ export default function Sidebar({ collapsed, onToggle, onHide }) {
         )}
       </div>
 
-      {/* Project switcher — only when expanded */}
+      {/* Project switcher */}
       {!collapsed && <ProjectSwitcher />}
 
       {/* Nav */}
@@ -182,13 +190,16 @@ export default function Sidebar({ collapsed, onToggle, onHide }) {
             key={to}
             to={to}
             end={to === '/'}
+            // ✅ Active state — was bg-blue-50 text-blue-700, now CSS variables
             className={({ isActive }) => cn(
               'flex items-center gap-2.5 py-2 mx-2 px-2.5 rounded-lg text-sm font-medium transition-colors mb-0.5',
-              isActive
-                ? 'bg-blue-50 text-blue-700'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900',
+              !isActive && 'text-slate-600 hover:bg-slate-50 hover:text-slate-900',
               collapsed && 'justify-center mx-1 px-0'
             )}
+            style={({ isActive }) => isActive ? {
+              backgroundColor: 'var(--brand-light)',
+              color:           'var(--brand-primary)',
+            } : {}}
             title={collapsed ? label : undefined}
           >
             <Icon size={15} className="shrink-0" />
@@ -197,7 +208,7 @@ export default function Sidebar({ collapsed, onToggle, onHide }) {
         ))}
       </nav>
 
-      {/* Credit balance in sidebar footer */}
+      {/* Credit footer */}
       {!collapsed && <CreditFooter />}
 
       {/* Collapse toggle */}

@@ -1,7 +1,6 @@
 package com.decisionmesh.llm.persistence;
 
 import com.decisionmesh.application.port.ExecutionRecordQueryPort;
-import com.decisionmesh.application.port.ExecutionRecordQueryPort.DriftRow;
 import com.decisionmesh.domain.execution.ExecutionRecord;
 import com.decisionmesh.domain.intent.Intent;
 import io.quarkus.logging.Log;
@@ -10,22 +9,27 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import javax.sql.DataSource;
-import java.math.BigDecimal;
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * Writes execution results to execution_records and spend_records.
- * Also provides read queries used by DriftEvaluatorService and
- * OutputQualityScorerService.
+ * Also provides read queries used by DriftEvaluatorService,
+ * ExecutionResource, and DriftResource.
  */
 @ApplicationScoped
 public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
 
-    // ── Write queries ─────────────────────────────────────────────────────────
+    // =========================================================================
+    // Write queries
+    // =========================================================================
 
     private static final String INSERT_EXECUTION = """
             INSERT INTO execution_records (
@@ -63,16 +67,10 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
             )
             """;
 
-    // ── Read queries (used by DriftEvaluatorService) ──────────────────────────
+    // =========================================================================
+    // Read queries — DriftEvaluatorService
+    // =========================================================================
 
-    /**
-     * Returns lightweight execution summary rows for a given adapter
-     * within the specified time window.
-     *
-     * Used by DriftEvaluatorService to build the baseline for drift calculation.
-     * Returns only the columns needed for drift: status, cost_usd, latency_ms,
-     * quality_score, executed_at.
-     */
     private static final String SELECT_RECENT_BY_ADAPTER = """
             SELECT
                 id,
@@ -88,10 +86,77 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
             LIMIT 500
             """;
 
+    // =========================================================================
+    // Read queries — ExecutionResource (UI list)
+    // =========================================================================
+
+    private static final String SELECT_LIST_BY_TENANT = """
+            SELECT
+                er.id,
+                er.intent_id,
+                er.adapter_id,
+                a.name            AS adapter_name,
+                er.status,
+                er.cost_usd,
+                er.latency_ms,
+                er.prompt_tokens,
+                er.completion_tokens,
+                er.total_tokens,
+                er.risk_score,
+                er.quality_score,
+                er.hallucination_detected,
+                er.failure_reason,
+                er.executed_at
+            FROM execution_records er
+            LEFT JOIN adapters a ON a.id = er.adapter_id
+            WHERE er.tenant_id = ?
+            """;
+
+    // =========================================================================
+    // Read queries — DriftResource (dashboard summary per adapter)
+    // =========================================================================
+
+    private static final String SELECT_DRIFT_SUMMARY = """
+            SELECT
+                er.adapter_id::TEXT                             AS adapter_id,
+                a.name                                          AS adapter_name,
+                AVG(er.cost_usd)                                AS avg_cost_usd,
+                AVG(er.latency_ms)                              AS avg_latency_ms,
+                AVG(er.quality_score)                           AS avg_quality_score,
+                AVG(CASE WHEN er.status != 'SUCCESS' THEN 1.0 ELSE 0.0 END) AS failure_rate,
+                COUNT(*)                                        AS execution_count,
+                MAX(er.executed_at)                             AS last_executed_at
+            FROM execution_records er
+            LEFT JOIN adapters a ON a.id = er.adapter_id
+            WHERE er.tenant_id  = ?
+              AND er.executed_at >= ?
+            GROUP BY er.adapter_id, a.name
+            ORDER BY execution_count DESC
+            """;
+
+    // =========================================================================
+    // Read queries — DriftResource (daily trend chart)
+    // =========================================================================
+
+    private static final String SELECT_DRIFT_TREND = """
+            SELECT
+                DATE_TRUNC('day', executed_at)   AS day,
+                AVG(cost_usd)                    AS avg_cost,
+                AVG(latency_ms)                  AS avg_latency,
+                COUNT(*)                         AS execution_count
+            FROM execution_records
+            WHERE tenant_id  = ?
+              AND executed_at >= ?
+            GROUP BY DATE_TRUNC('day', executed_at)
+            ORDER BY day ASC
+            """;
+
     @Inject
     DataSource dataSource;
 
-    // ── Public write API ──────────────────────────────────────────────────────
+    // =========================================================================
+    // Public write API
+    // =========================================================================
 
     public Uni<Void> save(ExecutionRecord record, Intent intent) {
         return Uni.createFrom().item(() -> {
@@ -102,13 +167,10 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
                         Log.warnf(ex, "Failed to persist execution record: intent=%s", intent.getId()));
     }
 
-    // ── Public read API ───────────────────────────────────────────────────────
+    // =========================================================================
+    // Public read API — DriftEvaluatorService
+    // =========================================================================
 
-    /**
-     * Fetch recent execution summaries for an adapter, back to {@code since}.
-     * Returns a list of {@link DriftRow} — a minimal projection used only
-     * by DriftEvaluatorService. No domain object hydration needed.
-     */
     @Override
     public Uni<List<DriftRow>> findRecentByAdapter(String adapterId, Instant since) {
         return Uni.createFrom().item(() -> {
@@ -129,39 +191,173 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
                                 rs.getString("status"),
                                 rs.getBigDecimal("cost_usd"),
                                 rs.getLong("latency_ms"),
-                                rs.getBigDecimal("quality_score"),   // may be null — handled by drift calc
+                                rs.getBigDecimal("quality_score"),
                                 rs.getTimestamp("executed_at").toInstant()
                         ));
                     }
                 }
-
             } catch (Exception ex) {
-                Log.warnf(ex, "findRecentByAdapter failed for adapter=%s since=%s", adapterId, since);
+                Log.warnf(ex, "findRecentByAdapter failed: adapter=%s since=%s", adapterId, since);
             }
             return rows;
         });
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // =========================================================================
+    // Public read API — ExecutionResource (UI list)
+    // =========================================================================
+
+    @Override
+    public Uni<List<ExecutionRow>> listByTenant(UUID tenantId, int limit,
+                                                String phase, String adapterId) {
+        return Uni.createFrom().item(() -> {
+            List<ExecutionRow> rows = new ArrayList<>();
+
+            // Build dynamic WHERE clauses
+            StringBuilder sql = new StringBuilder(SELECT_LIST_BY_TENANT);
+            if (phase != null && !phase.isBlank())
+                sql.append(" AND er.status = ?");
+            if (adapterId != null && !adapterId.isBlank())
+                sql.append(" AND er.adapter_id = ?::uuid");
+            sql.append(" ORDER BY er.executed_at DESC LIMIT ?");
+
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+
+                int idx = 1;
+                ps.setObject(idx++, tenantId);
+                if (phase != null && !phase.isBlank())
+                    ps.setString(idx++, phase);
+                if (adapterId != null && !adapterId.isBlank())
+                    ps.setString(idx++, adapterId);
+                ps.setInt(idx, limit);
+
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        rows.add(new ExecutionRow(
+                                UUID.fromString(rs.getString("id")),
+                                uuidOrNull(rs.getString("intent_id")),
+                                uuidOrNull(rs.getString("adapter_id")),
+                                rs.getString("adapter_name"),
+                                rs.getString("status"),
+                                rs.getBigDecimal("cost_usd"),
+                                rs.getLong("latency_ms"),
+                                rs.getInt("prompt_tokens"),
+                                rs.getInt("completion_tokens"),
+                                rs.getInt("total_tokens"),
+                                rs.getBigDecimal("risk_score"),
+                                rs.getBigDecimal("quality_score"),
+                                rs.getBoolean("hallucination_detected"),
+                                rs.getString("failure_reason"),
+                                rs.getTimestamp("executed_at").toInstant()
+                        ));
+                    }
+                }
+            } catch (Exception ex) {
+                Log.errorf(ex, "listByTenant failed: tenantId=%s", tenantId);
+            }
+            return rows;
+        });
+    }
+
+    // =========================================================================
+    // Public read API — DriftResource (adapter summary)
+    // =========================================================================
+
+    @Override
+    public Uni<List<AdapterDriftSummary>> getDriftSummary(UUID tenantId, int days) {
+        return Uni.createFrom().item(() -> {
+            List<AdapterDriftSummary> rows = new ArrayList<>();
+            Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
+
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(SELECT_DRIFT_SUMMARY)) {
+
+                ps.setObject(1, tenantId);
+                ps.setTimestamp(2, Timestamp.from(since));
+
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        // avg drift score = weighted combination of cost + latency + failure
+                        // mirrors DriftEvaluatorService weights at aggregate level
+                        double failureRate  = rs.getDouble("failure_rate");
+                        double avgCost      = rs.getDouble("avg_cost_usd");
+                        double avgLatency   = rs.getDouble("avg_latency_ms");
+                        double avgQuality   = rs.getDouble("avg_quality_score");
+
+                        // Simplified drift score for dashboard overview
+                        // Full per-execution drift is stored in intent_drift_evaluations
+                        double driftScore = Math.min(1.0, failureRate * 0.5
+                                + (avgCost > 0.01 ? 0.1 : 0.0)
+                                + (avgLatency > 5000 ? 0.2 : 0.0));
+
+                        Timestamp lastTs = rs.getTimestamp("last_executed_at");
+
+                        rows.add(new AdapterDriftSummary(
+                                rs.getString("adapter_id"),
+                                rs.getString("adapter_name"),
+                                Math.round(driftScore * 10000.0) / 10000.0,
+                                avgCost,
+                                avgLatency,
+                                avgQuality,
+                                failureRate,
+                                rs.getLong("execution_count"),
+                                lastTs != null ? lastTs.toInstant() : null
+                        ));
+                    }
+                }
+            } catch (Exception ex) {
+                Log.errorf(ex, "getDriftSummary failed: tenantId=%s days=%d", tenantId, days);
+            }
+            return rows;
+        });
+    }
+
+    // =========================================================================
+    // Public read API — DriftResource (daily trend)
+    // =========================================================================
+
+    @Override
+    public Uni<List<DriftTrendPoint>> getDriftTrend(UUID tenantId, int days) {
+        return Uni.createFrom().item(() -> {
+            List<DriftTrendPoint> rows = new ArrayList<>();
+            Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
+
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(SELECT_DRIFT_TREND)) {
+
+                ps.setObject(1, tenantId);
+                ps.setTimestamp(2, Timestamp.from(since));
+
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        Timestamp day = rs.getTimestamp("day");
+                        rows.add(new DriftTrendPoint(
+                                day != null ? day.toInstant() : Instant.now(),
+                                0.0,                              // avgDrift — from intent_drift_evaluations (extend later)
+                                rs.getDouble("avg_cost"),
+                                rs.getDouble("avg_latency"),
+                                rs.getLong("execution_count")
+                        ));
+                    }
+                }
+            } catch (Exception ex) {
+                Log.errorf(ex, "getDriftTrend failed: tenantId=%s days=%d", tenantId, days);
+            }
+            return rows;
+        });
+    }
+
+    // =========================================================================
+    // Private helpers
+    // =========================================================================
 
     private void persist(ExecutionRecord record, Intent intent) {
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
-
-            // FIX 1: BEGIN the transaction explicitly so SET LOCAL takes effect.
-            // SET LOCAL scopes the setting to the current transaction — it has no
-            // effect outside one. With autoCommit=false, a transaction only starts
-            // after the first statement; calling SET LOCAL before any DML meant it
-            // ran in autocommit mode and was immediately reset.
             conn.createStatement().execute("BEGIN");
             setRls(conn, intent.getTenantId());
 
-            // FIX 2: getExecutionId() returns null because ExecutionRecord.of() in
-            // the LLM adapters does not supply one. ps.setObject(1, null) sends a
-            // literal NULL to the PK column — PostgreSQL's DEFAULT gen_random_uuid()
-            // only fires when the column is OMITTED, not when NULL is passed explicitly.
-            // This threw a NOT NULL constraint violation, caught and swallowed silently,
-            // leaving execution_records permanently empty → cost analytics showed $0.
             UUID executionId = record.getExecutionId() != null
                     ? record.getExecutionId()
                     : UUID.randomUUID();
@@ -187,7 +383,7 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
                 ps.setDouble(12, cost);
                 ps.setDouble(13, 0.0);
                 ps.setString(14, record.getFailureReason());
-                ps.setString(15, record.getResponseText());   // null-safe — TEXT column accepts null
+                ps.setString(15, record.getResponseText());
                 ps.execute();
             }
 
@@ -212,7 +408,8 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
     }
 
     private void setRls(Connection conn, UUID tenantId) throws Exception {
-        try (PreparedStatement ps = conn.prepareStatement("SET LOCAL app.current_tenant_id = ?")) {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SET LOCAL app.current_tenant_id = ?")) {
             ps.setObject(1, tenantId.toString());
             ps.execute();
         }
@@ -228,6 +425,8 @@ public class ExecutionRecordRepository implements ExecutionRecordQueryPort {
         try { return UUID.fromString(id); } catch (Exception e) { return null; }
     }
 
-    // DriftRow is defined in ExecutionRecordQueryPort — this class implements that port.
-    // No local DriftRow record needed.
+    private UUID uuidOrNull(String s) {
+        if (s == null) return null;
+        try { return UUID.fromString(s); } catch (Exception e) { return null; }
+    }
 }

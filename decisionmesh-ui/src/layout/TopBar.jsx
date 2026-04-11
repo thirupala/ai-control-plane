@@ -37,10 +37,6 @@ function useBreadcrumbs() {
   });
 }
 
-// ── Credit balance pill ───────────────────────────────────────────────────────
-// Fix: previously navigated to '/billing' — now goes to '/billing?tab=credits'
-// so all three credit entry points (banner, sidebar footer, TopBar pill) are
-// consistent and land on the credit top-up tab.
 function CreditPill() {
   const navigate = useNavigate();
   const { balance, allocated, isLow, isEmpty, statusColor } = useCredits();
@@ -60,7 +56,6 @@ function CreditPill() {
           {balance?.toLocaleString()}
           <span className="font-normal text-slate-400"> cr</span>
         </span>
-        {/* Mini progress bar */}
         <div className="w-14 h-1 bg-slate-200 rounded-full overflow-hidden">
           <div className="h-full rounded-full transition-all"
             style={{ width: `${pct}%`, backgroundColor: statusColor }} />
@@ -70,7 +65,6 @@ function CreditPill() {
   );
 }
 
-// ── User menu dropdown ────────────────────────────────────────────────────────
 function UserMenu({ keycloak }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -116,7 +110,13 @@ function UserMenu({ keycloak }) {
         onClick={() => setOpen(o => !o)}
         className="flex items-center gap-2 pl-2 border-l border-slate-100 hover:bg-slate-50 rounded-lg px-2 py-1 transition-colors"
       >
-        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-xs font-bold text-white shrink-0">
+        {/* ✅ User avatar — was bg-gradient from-blue-500 to-indigo-600, now CSS variables */}
+        <div
+          className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
+          style={{
+            background: 'linear-gradient(to bottom right, var(--brand-primary), var(--brand-dark))',
+          }}
+        >
           {initials}
         </div>
         <div className="hidden sm:block text-left">
@@ -159,7 +159,6 @@ function UserMenu({ keycloak }) {
   );
 }
 
-// ── TopBar ────────────────────────────────────────────────────────────────────
 export default function TopBar({ keycloak, sidebarHidden, onToggleSidebar }) {
   const crumbs = useBreadcrumbs();
   const { activeProject, loading: projectLoading } = useProject();
@@ -168,7 +167,6 @@ export default function TopBar({ keycloak, sidebarHidden, onToggleSidebar }) {
     <header className="flex items-center justify-between bg-white border-b border-slate-100 shrink-0"
       style={{ height: 48, paddingLeft: sidebarHidden ? 12 : 16, paddingRight: 12 }}>
 
-      {/* Left: show sidebar + breadcrumb */}
       <div className="flex items-center gap-2 min-w-0">
         {sidebarHidden && (
           <button onClick={onToggleSidebar} title="Show sidebar"
@@ -188,11 +186,9 @@ export default function TopBar({ keycloak, sidebarHidden, onToggleSidebar }) {
         </nav>
       </div>
 
-      {/* Right: credit pill + bell + active project + user menu */}
       <div className="flex items-center gap-2 shrink-0">
         <CreditPill />
 
-        {/* Active project pill */}
         {!projectLoading && activeProject && (
           <span className="hidden lg:flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 max-w-28">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />

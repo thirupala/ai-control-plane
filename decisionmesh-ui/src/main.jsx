@@ -9,109 +9,137 @@ import { BrandingProvider } from './context/BrandingContext';
 import { CreditProvider } from './context/CreditContext';
 import App from './App';
 import LandingPage from './pages/LandingPage';
+import Onboarding from './pages/Onboarding';
 import { getMe } from './utils/api';
 import './index.css';
 
 const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-      retry: (count, err) => {
-        const status = err?.response?.status;
-        if (status >= 400 && status < 500) return false;
-        return count < 2;
-      },
+    defaultOptions: {
+        queries: {
+            staleTime: 30_000,
+            retry: (count, err) => {
+                const status = err?.response?.status;
+                if (status >= 400 && status < 500) return false;
+                return count < 2;
+            },
+        },
     },
-  },
 });
 
 const initOptions = {
-  onLoad: 'check-sso',
-  pkceMethod: 'S256',
-  checkLoginIframe: false,
+    onLoad: 'check-sso',
+    pkceMethod: 'S256',
+    checkLoginIframe: false,
 };
 
 function FullScreenSpinner() {
-  return (
-      <div style={{
-        height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: '#08080a',
-      }}>
+    return (
         <div style={{
-          width: 32, height: 32,
-          border: '2px solid rgba(37,99,235,0.3)',
-          borderTopColor: '#2563eb',
-          borderRadius: '50%',
-          animation: 'spin 0.8s linear infinite',
-        }} />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-  );
+            height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: '#f8fafc',
+        }}>
+            <div style={{
+                width: 32, height: 32,
+                border: '2px solid rgba(37,99,235,0.3)',
+                borderTopColor: '#2563eb',
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+            }} />
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+    );
 }
 
 function AppWrapper() {
-  const { keycloak, initialized } = useKeycloak();
-  const [provisioned, setProvisioned] = useState(false);
+    const { keycloak, initialized } = useKeycloak();
+    const [provisioned,  setProvisioned]  = useState(false);
+    const [needsOnboard, setNeedsOnboard] = useState(false);
 
-  // ── Silent token refresh every 60s ───────────────────────────────────────────
-  useEffect(() => {
-    if (!initialized || !keycloak.authenticated) return;
-    const interval = setInterval(() => {
-      keycloak.updateToken(70).catch(() => {});
-    }, 60_000);
-    return () => clearInterval(interval);
-  }, [initialized, keycloak.authenticated]);
+    // ── Silent token refresh every 60s ─────────────────────────────────────────
+    useEffect(() => {
+        if (!initialized || !keycloak.authenticated) return;
+        const interval = setInterval(() => {
+            keycloak.updateToken(70).catch(() => {});
+        }, 60_000);
+        return () => clearInterval(interval);
+    }, [initialized, keycloak.authenticated]);
 
-  // ── Provision user + force fresh token before rendering app ──────────────────
-  // Called once per login. getMe() triggers provisionNewUser() on the backend
-  // (idempotent — safe to call on every login). After provisioning, we force
-  // a token refresh so tenantId + userId claims are present before BrandingContext,
-  // ProjectContext and Dashboard fire their API calls.
-  useEffect(() => {
-    if (!initialized || !keycloak.authenticated || !keycloak.token) return;
+    // ── On every login: call /me → check onboarding status from DB ─────────────
+    //
+    // KEY CHANGE: We now use the /me API response (onboarded: true/false) to
+    // decide whether to show onboarding — NOT the JWT tenantId claim.
+    //
+    // Why: The JWT mapper may not have tenantId yet (Keycloak attribute write
+    // is async / mapper config may be incomplete). The DB is always authoritative.
+    //
+    // Flow:
+    //   1. Call GET /me → backend checks DB → returns { onboarded: true/false }
+    //   2. If onboarded=false  → show Onboarding page
+    //   3. If onboarded=true   → force token refresh (to pick up latest claims)
+    //                          → render App
+    // ───────────────────────────────────────────────────────────────────────────
+    useEffect(() => {
+        if (!initialized || !keycloak.authenticated || !keycloak.token) return;
 
-    getMe(keycloak)
-        .then(() => {
-          // Force Keycloak to issue a completely fresh token by expiring the current one.
-          // Without this, updateToken() serves the cached token which lacks tenantId.
-          keycloak.tokenParsed.exp = 0;
-          return keycloak.updateToken(-1);
-        })
-        .then(() => new Promise(resolve => setTimeout(resolve, 300))) // allow token propagation
-        .then(() => setProvisioned(true))
-        .catch(() => setProvisioned(true)); // fail open — never block the UI permanently
+        getMe(keycloak)
+            .then(meData => {
+                const onboarded = meData?.onboarded === true; // ← DB-based, not JWT-based
 
-  }, [initialized, keycloak.authenticated, keycloak.token]);
+                if (!onboarded) {
+                    // New user — show onboarding immediately, no token refresh needed
+                    setNeedsOnboard(true);
+                    setProvisioned(true);
+                    return;
+                }
 
-  // Keycloak still initialising
-  if (!initialized) return <FullScreenSpinner />;
+                // Already onboarded — force token refresh to get latest claims
+                // then render the app
+                keycloak.tokenParsed.exp = 0;
+                keycloak.updateToken(-1)
+                    .then(() => new Promise(resolve => setTimeout(resolve, 300)))
+                    .finally(() => {
+                        setNeedsOnboard(false);
+                        setProvisioned(true);
+                    });
+            })
+            .catch(() => {
+                // /me failed — safe fallback: show app, let individual pages handle errors
+                setNeedsOnboard(false);
+                setProvisioned(true);
+            });
 
-  // Not authenticated — show landing page
-  if (!keycloak.authenticated) return <LandingPage />;
+    }, [initialized, keycloak.authenticated, keycloak.token]);
 
-  // Authenticated but provisioning + token refresh not done yet
-  if (!provisioned) return <FullScreenSpinner />;
+    // Keycloak still initialising
+    if (!initialized) return <FullScreenSpinner />;
 
-  // Provisioned and fresh token ready — safe to render app
-  // All child contexts (Branding, Project, Credit) will now have
-  // a token that contains tenantId + userId claims
-  return (
-      <BrandingProvider keycloak={keycloak}>
-        <ProjectProvider keycloak={keycloak}>
-          <CreditProvider keycloak={keycloak}>
-            <App keycloak={keycloak} />
-          </CreditProvider>
-        </ProjectProvider>
-      </BrandingProvider>
-  );
+    // Not authenticated — show landing page
+    if (!keycloak.authenticated) return <LandingPage />;
+
+    // Authenticated but /me call not complete yet
+    if (!provisioned) return <FullScreenSpinner />;
+
+    // New user — show onboarding
+    if (needsOnboard) return <Onboarding keycloak={keycloak} />;
+
+    // Fully provisioned — render app
+    return (
+        <BrandingProvider keycloak={keycloak}>
+            <ProjectProvider keycloak={keycloak}>
+                <CreditProvider keycloak={keycloak}>
+                    <App keycloak={keycloak} />
+                </CreditProvider>
+            </ProjectProvider>
+        </BrandingProvider>
+    );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
     <ReactKeycloakProvider authClient={keycloakInstance} initOptions={initOptions}>
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <AppWrapper />
-        </BrowserRouter>
-      </QueryClientProvider>
+        <QueryClientProvider client={queryClient}>
+            <BrowserRouter>
+                <AppWrapper />
+            </BrowserRouter>
+        </QueryClientProvider>
     </ReactKeycloakProvider>
 );

@@ -5,7 +5,6 @@ import io.smallrye.mutiny.Uni;
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
-import org.hibernate.annotations.UuidGenerator;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -14,20 +13,29 @@ import java.util.UUID;
 @Table(
         name = "users",
         uniqueConstraints = {
-                @UniqueConstraint(name = "uq_users_external_user_id", columnNames = "external_user_id"),
-                @UniqueConstraint(name = "uq_users_email",            columnNames = "email")
+                @UniqueConstraint(name = "uq_users_email", columnNames = "email")
         }
 )
 public class UserEntity extends PanacheEntityBase {
 
+    /**
+     * userId = Keycloak subject (sub claim) parsed as UUID.
+     *
+     * We no longer auto-generate this — it is set explicitly from the
+     * Keycloak sub before persist, so @UuidGenerator is intentionally removed.
+     * This means one ID everywhere: JWT sub == DB user_id == userId in all tables.
+     */
     @Id
-    @UuidGenerator
     @Column(name = "user_id", updatable = false, nullable = false)
     public UUID userId;
 
-
-    @Column(name = "external_user_id", unique = true, updatable = false, length = 255)
-    public String externalUserId;
+    /**
+     * tenantId is null for brand-new users who haven't completed onboarding.
+     * It is set in OnboardingService.setupTenant() and written to Keycloak
+     * attributes so it appears in the JWT on next token refresh.
+     */
+    @Column(name = "tenant_id")
+    public UUID tenantId;
 
     @Column(name = "email", unique = true, length = 255)
     public String email;
@@ -49,19 +57,20 @@ public class UserEntity extends PanacheEntityBase {
     // ── Reactive finders ──────────────────────────────────────────────────────
 
     /**
-     * Finds a user by email address.
+     * Finds a user by their Keycloak sub (= userId UUID).
+     * Use this everywhere — externalUserId no longer exists.
+     *
      * Must be called inside a Panache session context:
-     *   Panache.withSession(() -> UserEntity.findByEmail(email))
+     *   Panache.withSession(() -> UserEntity.findByKeycloakSub(sub))
      */
-    public static Uni<UserEntity> findByEmail(String email) {
-        return find("email", email).firstResult();
+    public static Uni<UserEntity> findByKeycloakSub(String keycloakSub) {
+        return findById(UUID.fromString(keycloakSub));
     }
 
     /**
-     * Finds a user by their external IdP user ID (e.g. Keycloak sub claim).
-     * Must be called inside a Panache session context.
+     * Finds a user by email address.
      */
-    public static Uni<UserEntity> findByExternalUserId(String externalUserId) {
-        return find("externalUserId", externalUserId).firstResult();
+    public static Uni<UserEntity> findByEmail(String email) {
+        return find("email", email).firstResult();
     }
 }

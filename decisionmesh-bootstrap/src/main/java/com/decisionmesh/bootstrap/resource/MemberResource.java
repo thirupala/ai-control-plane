@@ -47,7 +47,7 @@ public class MemberResource {
     }
 
     private UUID userId() {
-        String uid = jwt.getClaim("userId");
+        String uid = jwt.getClaim("sub");
         if (uid == null || uid.isBlank()) throw new ForbiddenException("Missing userId in token");
         try { return UUID.fromString(uid); }
         catch (IllegalArgumentException e) { throw new BadRequestException("Invalid userId format"); }

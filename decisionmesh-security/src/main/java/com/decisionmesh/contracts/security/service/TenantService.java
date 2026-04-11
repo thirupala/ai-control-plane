@@ -56,7 +56,6 @@ public class TenantService {
                                                             return org.<OrganizationEntity>persist()
                                                                     .flatMap(savedOrg -> {
                                                                         // 4. Link Org back to Tenant (Backfill)
-                                                                        t.organizationId = savedOrg.id;
                                                                         LOG.infof("Atomic Provisioning Complete: Tenant=%s, Org=%s", t.id, savedOrg.id);
                                                                         return Uni.createFrom().item(t.id);
                                                                     });
